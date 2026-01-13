@@ -63,6 +63,81 @@ def fetch_bls_series(series_id: str) -> pd.Series:
 
     return df.set_index("date")["value"].sort_index()
 
+# ---------------------------------------------------
+#  Supercore
+# --------------------------------------------------
+
+REL_IMPORTANCE_URL = "https://www.bls.gov/cpi/tables/relative-importance/2024.htm"
+
+@st.cache_data(ttl=60*60*24)  # cache for 24h
+def get_supercore_weights():
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+        ),
+        "Referer": "https://www.bls.gov/cpi/"
+    }
+    r = requests.get(REL_IMPORTANCE_URL, headers=headers, timeout=30)
+    r.raise_for_status()
+
+    t = pd.read_html(r.text)[0]
+    t.columns = [str(c).strip() for c in t.columns]
+    item_col = t.columns[0]
+    cpiu_col = next(c for c in t.columns if "CPI-U" in c)
+
+    t[item_col] = t[item_col].astype(str).str.strip()
+    t[cpiu_col] = pd.to_numeric(t[cpiu_col], errors="coerce")
+
+    def pick(label):
+        hit = t[t[item_col].str.contains(label, case=False, na=False)]
+        val = hit.iloc[0][cpiu_col]
+        return float(val) / 100.0
+
+    w_cs   = pick("Services less energy services")
+    w_rent = pick("Rent of primary residence")
+    w_oer  = pick("Owners' equivalent rent of residences")
+
+    return w_cs, w_rent, w_oer
+
+
+def fetch_bls_df(series_map: dict) -> pd.DataFrame:
+    """
+    series_map: {series_id: friendly_name}
+    returns df with columns: Date + friendly_name columns
+    """
+    payload = {
+        "seriesid": list(series_map.keys()),
+        "startyear": "2015",
+        "endyear": "2025",
+        "registrationkey": API_KEY
+    }
+    data = fetch_bls(payload)
+    if data is None:
+        return pd.DataFrame()
+
+    dfs = []
+    for s in data["Results"]["series"]:
+        sid = s["seriesID"]
+        name = series_map[sid]
+
+        df = pd.DataFrame(s["data"])
+        df = df[df["period"].str.startswith("M")].copy()
+
+        df["Date"] = pd.to_datetime(
+            df["year"] + "-" + df["period"].str.replace("M", ""),
+            format="%Y-%m",
+            errors="coerce"
+        )
+        df[name] = pd.to_numeric(df["value"], errors="coerce")
+        df = df[["Date", name]].sort_values("Date")
+        dfs.append(df)
+
+    out = dfs[0]
+    for d in dfs[1:]:
+        out = out.merge(d, on="Date", how="outer")
+    return out.sort_values("Date")
+
 
 # --------------------------------------------------
 # CPI 3dp
@@ -200,10 +275,10 @@ def run_nfp():
 # CPI Core Goods & Services (fixed)
 # --------------------------------------------------
 def run_cpi_goods_services():
-    bls_disruption_warning(
-    "- Monthly Oct. and Nov. data were never released.\n"
-)
+    # (optional) your warning call
+    # bls_disruption_warning("...")
 
+    # --- Your existing SA/NSA pulls via fetch_bls_series (kept) ---
     series_ids = {
         "Headline": ("CUSR0000SA0", "CUUR0000SA0"),
         "Core": ("CUSR0000SA0L1E", "CUUR0000SA0L1E"),
@@ -212,9 +287,7 @@ def run_cpi_goods_services():
     }
 
     tables = {}
-
     for label, (sa_id, nsa_id) in series_ids.items():
-
         sa = fetch_bls_series(sa_id)
         nsa = fetch_bls_series(nsa_id)
 
@@ -225,17 +298,71 @@ def run_cpi_goods_services():
         df = pd.DataFrame(index=sa.index)
         df["m/m"] = (sa / sa.shift(1) - 1) * 100
         df["y/y"] = (nsa / nsa.shift(12) - 1) * 100
-
         tables[label] = df
 
-    combined = pd.concat(tables, axis=1)
+    combined = pd.concat(tables, axis=1)  # <-- IMPORTANT: no dropna()
 
+    # --- Supercore add-on ---
+    # SA series (m/m)
+    SA_MAP = {
+        "CUSR0000SASLE": "Core Services SA",
+        "CUSR0000SEHA":  "Rent SA",
+        "CUSR0000SEHC":  "OER SA"
+    }
+
+    # NSA series (y/y)
+    NSA_MAP = {
+        "CUUR0000SASLE": "Core Services NSA",
+        "CUUR0000SEHA":  "Rent NSA",
+        "CUUR0000SEHC":  "OER NSA"
+    }
+
+    df_sa = fetch_bls_df(SA_MAP)
+    df_nsa = fetch_bls_df(NSA_MAP)
+
+    if not df_sa.empty and not df_nsa.empty:
+        sc = df_sa.merge(df_nsa, on="Date", how="outer").sort_values("Date")
+
+        W_CS, W_RENT, W_OER = get_supercore_weights()
+        DEN = W_CS - W_RENT - W_OER
+
+        sc["Supercore Index SA"] = (
+            W_CS * sc["Core Services SA"]
+            - W_RENT * sc["Rent SA"]
+            - W_OER * sc["OER SA"]
+        ) / DEN
+
+        sc["Supercore Index NSA"] = (
+            W_CS * sc["Core Services NSA"]
+            - W_RENT * sc["Rent NSA"]
+            - W_OER * sc["OER NSA"]
+        ) / DEN
+
+        sc["Supercore m/m"] = (sc["Supercore Index SA"] / sc["Supercore Index SA"].shift(1) - 1) * 100
+        sc["Supercore y/y"] = (sc["Supercore Index NSA"] / sc["Supercore Index NSA"].shift(12) - 1) * 100
+
+        sc_out = sc[["Date", "Supercore m/m", "Supercore y/y"]].set_index("Date")
+        # merge into combined (aligned on Date index)
+        sc_out = sc[["Date", "Supercore m/m", "Supercore y/y"]].set_index("Date")
+        combined = pd.concat([combined, sc_out], axis=1)
+
+    # --- Last 12 months, latest first ---
     last12 = combined.iloc[-12:].iloc[::-1].round(2)
     last12.index = last12.index.strftime("%B %Y")
-    last12.columns = [f"{top} {sub}" for (top, sub) in last12.columns.to_flat_index()]
+    last12.index.name = "Month"
 
-    st.subheader("CPI Core Goods & Services (m/m SA, y/y NSA)")
+    # Flatten MultiIndex columns (Headline m/m etc.)
+    flat_cols = []
+    for col in last12.columns:
+        if isinstance(col, tuple):
+            flat_cols.append(f"{col[0]} {col[1]}")
+        else:
+            flat_cols.append(col)
+    last12.columns = flat_cols
+
+    st.subheader("CPI Core Goods & Services (m/m SA, y/y NSA) + Supercore (Core Services ex-Rent+OER)")
     st.dataframe(last12, use_container_width=True)
+
 
 
 # --------------------------------------------------
