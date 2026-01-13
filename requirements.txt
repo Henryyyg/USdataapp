@@ -1,4 +1,6 @@
 streamlit
 pandas
 requests
-python-dateutil
+lxml
+html5lib
+beautifulsoup4
