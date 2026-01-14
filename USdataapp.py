@@ -30,7 +30,8 @@ def fetch_bls(payload):
     response = requests.post(
         BLS_URL,
         data=json.dumps(payload),
-        headers={"Content-Type": "application/json"}
+        headers={"Content-Type": "application/json"},
+        timeout=30
     )
     data = response.json()
     if data.get("status") != "REQUEST_SUCCEEDED":
@@ -596,7 +597,8 @@ def run_jolts():
                 rows.append({
                     "Date": f"{e['year']}-{e['period'][1:]}",
                     "Series": name,
-                    "Value": float(e["value"])
+                    "Value": pd.to_numeric(e["value"], errors="coerce")
+
                 })
 
     df = pd.DataFrame(rows)
