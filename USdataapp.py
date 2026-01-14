@@ -505,9 +505,7 @@ def run_cpi_annualised():
 # PPI → PCE Components
 # --------------------------------------------------
 def run_ppi_pce():
-    bls_disruption_warning(
-    "- October PPI data was not released.\n"
-)
+    
     ids = {
         "PCU5239405239401": "Portfolio Management PPI",
         "WPS3022": "Passenger Airline Services",
