@@ -7,7 +7,7 @@ from datetime import datetime
 # --------------------------------------------------
 # GLOBAL SETTINGS
 # --------------------------------------------------
-API_KEY = "303c04b34b7842558e0706dcbd5db6a9"
+API_KEY = st.secrets.get("BLS_API_KEY", "")
 BLS_URL = "https://api.bls.gov/publicAPI/v2/timeseries/data/"
 
 st.set_page_config(page_title="US Macro Dashboard", layout="wide")
