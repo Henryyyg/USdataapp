@@ -556,11 +556,9 @@ def run_ppi_pce():
 
     st.subheader("PPI → PCE Components (m/m %)")
     st.dataframe(final.head(24), use_container_width=True)
-    # --------------------------------------------------
+# --------------------------------------------------
 # Headline-style summary box (latest vs previous)
 # --------------------------------------------------
-headline_lines = []
-
 display_df = final.head(24)
 
 if display_df.empty:
@@ -569,7 +567,6 @@ if display_df.empty:
 
 latest = display_df.iloc[0]
 prev = display_df.iloc[1] if len(display_df) > 1 else None
-
 
 headline_lines = []
 for col in display_df.columns:
@@ -588,6 +585,7 @@ headline_text = "\n".join(headline_lines)
 
 st.markdown("**PPI → PCE Components (headline format)**")
 st.text_area("", value=headline_text, height=200)
+
 
 
 
