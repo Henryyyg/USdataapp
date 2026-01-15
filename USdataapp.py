@@ -561,29 +561,33 @@ def run_ppi_pce():
 # --------------------------------------------------
 headline_lines = []
 
-latest = final.iloc[0]
-prev = final.iloc[1] if len(final) > 1 else None
+display_df = final.head(24)
 
-for col in final.columns:
-    if prev is not None:
-        line = (
-            f"{col}: "
-            f"{latest[col]:.2f}% "
-            f"(prev. {prev[col]:.2f}%)"
-        )
+if display_df.empty:
+    st.info("No PPI → PCE component data available to summarise yet.")
+    return
+
+latest = display_df.iloc[0]
+prev = display_df.iloc[1] if len(display_df) > 1 else None
+
+
+headline_lines = []
+for col in display_df.columns:
+    latest_val = latest[col]
+    prev_val = prev[col] if prev is not None else pd.NA
+
+    if pd.isna(latest_val):
+        continue  # skip missing
+
+    if prev is not None and not pd.isna(prev_val):
+        headline_lines.append(f"{col}: {latest_val:.2f}% (prev. {prev_val:.2f}%)")
     else:
-        line = f"{col}: {latest[col]:.2f}%"
-
-    headline_lines.append(line)
+        headline_lines.append(f"{col}: {latest_val:.2f}%")
 
 headline_text = "\n".join(headline_lines)
 
 st.markdown("**PPI → PCE Components (headline format)**")
-st.text_area(
-    label="",
-    value=headline_text,
-    height=200
-)
+st.text_area("", value=headline_text, height=200)
 
 
 
