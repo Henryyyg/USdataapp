@@ -467,7 +467,13 @@ def run_cpi_goods_services():
     # -----------------------------
     # Charts (last 12 months only)
     # -----------------------------
-    chart_base = combined.sort_index().tail(12)
+    chart_base = (
+    combined
+    .sort_index()
+    .tail(12)
+    .interpolate(method="linear", limit=1)
+    )
+
     
     mm = pd.DataFrame(index=chart_base.index)
     yy = pd.DataFrame(index=chart_base.index)
@@ -489,6 +495,7 @@ def run_cpi_goods_services():
     
     st.markdown("### Core goods/services + Supercore y/y (NSA) – last 12 months")
     st.line_chart(yy)
+    st.caption("Note: Chart lines interpolate across missing months caused by BLS data disruptions.")
 
 
 
