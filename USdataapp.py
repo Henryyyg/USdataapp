@@ -465,35 +465,31 @@ def run_cpi_goods_services():
     st.dataframe(last12, use_container_width=True)
 
     # -----------------------------
-    # Charts (m/m and y/y separate)
+    # Charts (last 12 months only)
     # -----------------------------
-    chart_df = combined.copy()
+    chart_base = combined.sort_index().tail(12)
     
-    # combined has MultiIndex columns for core goods/services, but Supercore is single-level
-    mm = pd.DataFrame(index=chart_df.index)
-    yy = pd.DataFrame(index=chart_df.index)
+    mm = pd.DataFrame(index=chart_base.index)
+    yy = pd.DataFrame(index=chart_base.index)
     
     # Core goods/services (MultiIndex)
-    mm["Core goods"] = chart_df[("Core goods", "m/m")]
-    mm["Core services"] = chart_df[("Core services", "m/m")]
-    yy["Core goods"] = chart_df[("Core goods", "y/y")]
-    yy["Core services"] = chart_df[("Core services", "y/y")]
+    mm["Core goods"] = chart_base[("Core goods", "m/m")]
+    mm["Core services"] = chart_base[("Core services", "m/m")]
+    yy["Core goods"] = chart_base[("Core goods", "y/y")]
+    yy["Core services"] = chart_base[("Core services", "y/y")]
     
     # Supercore (single level)
-    if "Supercore m/m" in chart_df.columns:
-        mm["Supercore"] = chart_df["Supercore m/m"]
-    if "Supercore y/y" in chart_df.columns:
-        yy["Supercore"] = chart_df["Supercore y/y"]
+    if "Supercore m/m" in chart_base.columns:
+        mm["Supercore"] = chart_base["Supercore m/m"]
+    if "Supercore y/y" in chart_base.columns:
+        yy["Supercore"] = chart_base["Supercore y/y"]
     
-    # Sort oldest -> newest for charts
-    mm = mm.sort_index()
-    yy = yy.sort_index()
-    
-    st.markdown("### Core goods/services + Supercore m/m (SA) – chart")
+    st.markdown("### Core goods/services + Supercore m/m (SA) – last 12 months")
     st.line_chart(mm)
     
-    st.markdown("### Core goods/services + Supercore y/y (NSA) – chart")
+    st.markdown("### Core goods/services + Supercore y/y (NSA) – last 12 months")
     st.line_chart(yy)
+
 
 
 # --------------------------------------------------
