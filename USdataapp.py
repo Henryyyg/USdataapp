@@ -23,7 +23,7 @@ def bls_disruption_warning(message: str):
         icon="⚠️"
     )
 #---------------------------------------------------
- CHARTING
+# CHARTING
 #---------------------------------------------------
 def add_charts(chart_df: pd.DataFrame, title: str):
     """
