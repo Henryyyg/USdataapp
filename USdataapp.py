@@ -116,17 +116,22 @@ def get_supercore_weights():
     return w_cs, w_rent, w_oer
 
 
-def fetch_bls_df(series_map: dict) -> pd.DataFrame:
+def fetch_bls_df(series_map: dict, years_back: int = 5) -> pd.DataFrame:
     """
     series_map: {series_id: friendly_name}
+    years_back: how many years of history to pull (rolling)
     returns df with columns: Date + friendly_name columns
     """
+    endyear = datetime.today().year
+    startyear = endyear - years_back
+
     payload = {
         "seriesid": list(series_map.keys()),
-        "startyear": "2015",
-        "endyear": "2025",
+        "startyear": str(startyear),
+        "endyear": str(endyear),
         "registrationkey": API_KEY
     }
+
     data = fetch_bls(payload)
     if data is None:
         return pd.DataFrame()
@@ -152,6 +157,7 @@ def fetch_bls_df(series_map: dict) -> pd.DataFrame:
     for d in dfs[1:]:
         out = out.merge(d, on="Date", how="outer")
     return out.sort_values("Date")
+
 
 
 # --------------------------------------------------
@@ -394,7 +400,12 @@ def run_cpi_goods_services():
         sc_out = sc[["Date", "Supercore m/m", "Supercore y/y"]].set_index("Date")
         # merge into combined (aligned on Date index)
         sc_out = sc[["Date", "Supercore m/m", "Supercore y/y"]].set_index("Date")
+
+        # Keep supercore aligned to the same last 12 months as the table view
+        sc_out = sc_out.tail(12)
+
         combined = pd.concat([combined, sc_out], axis=1)
+
 
     # --- Last 12 months, latest first ---
     last12 = combined.iloc[-12:].iloc[::-1].round(2)
