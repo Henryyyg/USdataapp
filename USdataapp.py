@@ -145,12 +145,20 @@ def fetch_bls_df(series_map: dict) -> pd.DataFrame:
 # --------------------------------------------------
 def run_cpi_3dp():
     bls_disruption_warning(
-    "- October M/M CPI was not released, and November represents two months from Sept. to Nov.\n"
-)
+        "- October m/m CPI was not released; short-term momentum may be distorted around this period.\n"
+    )
+
+    # SA for m/m + NSA for y/y
+    series = {
+        "CUSR0000SA0": "Headline CPI SA",
+        "CUSR0000SA0L1E": "Core CPI SA",
+        "CUUR0000SA0": "Headline CPI NSA",
+        "CUUR0000SA0L1E": "Core CPI NSA",
+    }
 
     payload = {
-        "seriesid": ["CUSR0000SA0", "CUSR0000SA0L1E"],
-        "startyear": "2024",
+        "seriesid": list(series.keys()),
+        "startyear": "2023",   # need 12m history for y/y
         "endyear": "2025",
         "registrationkey": API_KEY
     }
@@ -159,42 +167,55 @@ def run_cpi_3dp():
     if data is None:
         return
 
-    series_names = {
-        "CUSR0000SA0": "Headline CPI SA",
-        "CUSR0000SA0L1E": "Core CPI SA"
-    }
-
+    # Build one combined dataframe of index levels
     dfs = []
-
-    for series in data["Results"]["series"]:
-        sid = series["seriesID"]
-        df = pd.DataFrame(series["data"])
+    for s in data["Results"]["series"]:
+        sid = s["seriesID"]
+        name = series[sid]
+        df = pd.DataFrame(s["data"])
+        df = df[df["period"].str.startswith("M")].copy()
 
         df["Date"] = pd.to_datetime(
             df["year"] + "-" + df["period"].str.replace("M", ""),
+            format="%Y-%m",
             errors="coerce"
         )
-        df["Value"] = pd.to_numeric(df["value"], errors="coerce")
-        df = df.sort_values("Date")
+        df[name] = pd.to_numeric(df["value"], errors="coerce")
+        df = df[["Date", name]].sort_values("Date")
+        dfs.append(df)
 
-        col = series_names.get(sid, sid)
-        df[col] = (df["Value"].pct_change() * 100).round(3)
-        dfs.append(df[["Date", col]])
+    out = dfs[0]
+    for d in dfs[1:]:
+        out = out.merge(d, on="Date", how="outer")
 
-    final = dfs[0]
-    for x in dfs[1:]:
-        final = final.merge(x, on="Date", how="outer")
+    out = out.sort_values("Date")
 
-    final = final.sort_values("Date", ascending=False).head(12)
+    # ---- Compute changes ----
+    # m/m from SA (continuity-safe: blanks if prior month missing)
+    out["Headline CPI m/m"] = ((out["Headline CPI SA"] / out["Headline CPI SA"].shift(1) - 1) * 100)
+    out.loc[out["Headline CPI SA"].isna() | out["Headline CPI SA"].shift(1).isna(), "Headline CPI m/m"] = pd.NA
+
+    out["Core CPI m/m"] = ((out["Core CPI SA"] / out["Core CPI SA"].shift(1) - 1) * 100)
+    out.loc[out["Core CPI SA"].isna() | out["Core CPI SA"].shift(1).isna(), "Core CPI m/m"] = pd.NA
+
+    # y/y from NSA
+    out["Headline CPI y/y"] = ((out["Headline CPI NSA"] / out["Headline CPI NSA"].shift(12) - 1) * 100)
+    out["Core CPI y/y"] = ((out["Core CPI NSA"] / out["Core CPI NSA"].shift(12) - 1) * 100)
+
+    # Keep just the 4 prints
+    final = out[["Date", "Headline CPI m/m", "Core CPI m/m", "Headline CPI y/y", "Core CPI y/y"]]
+
+    # Last 12 months, newest first
+    final = final.sort_values("Date", ascending=False).head(12).copy()
     final["Date"] = final["Date"].dt.strftime("%Y-%m")
 
-    st.subheader("CPI (m/m %, 3 decimal places)")
-    # Format CPI values to always show 3 decimal places (no % sign)
-    formatted = final.copy()
-    formatted["Headline CPI SA"] = formatted["Headline CPI SA"].apply(lambda x: f"{x:.3f}")
-    formatted["Core CPI SA"] = formatted["Core CPI SA"].apply(lambda x: f"{x:.3f}")
+    # Format to always show 3dp (no % sign)
+    for col in ["Headline CPI m/m", "Core CPI m/m", "Headline CPI y/y", "Core CPI y/y"]:
+        final[col] = final[col].apply(lambda x: "" if pd.isna(x) else f"{x:.3f}")
 
-    st.dataframe(formatted, use_container_width=True)
+    st.subheader("CPI (m/m and y/y, 3dp)")
+    st.dataframe(final, use_container_width=True)
+
 
 # --------------------------------------------------
 # NFP & Unemployment Rate
