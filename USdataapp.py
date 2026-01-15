@@ -465,26 +465,28 @@ def run_cpi_goods_services():
     st.dataframe(last12, use_container_width=True)
 
     # -----------------------------
-    # Charts (last 12 months only)
+    # Charts (force last 12 months + bridge missing months)
     # -----------------------------
+    # 1) Build a complete last-12-month monthly index (month-start)
+    end = combined.sort_index().index.max()
+    end = pd.Timestamp(end.year, end.month, 1)  # month-start
+    chart_index = pd.date_range(end=end, periods=12, freq="MS")
+    
+    # 2) Reindex to include missing months (e.g. November), then interpolate for chart only
     chart_base = (
-    combined
-    .sort_index()
-    .tail(12)
-    .interpolate(method="linear", limit=1)
+        combined.sort_index()
+        .reindex(chart_index)                 # <-- this creates the missing month row
+        .interpolate(method="linear", limit=1)  # <-- bridges a 1-month hole (shutdown-style)
     )
-
     
     mm = pd.DataFrame(index=chart_base.index)
     yy = pd.DataFrame(index=chart_base.index)
     
-    # Core goods/services (MultiIndex)
-    mm["Core goods"] = chart_base[("Core goods", "m/m")]
+    mm["Core goods"]    = chart_base[("Core goods", "m/m")]
     mm["Core services"] = chart_base[("Core services", "m/m")]
-    yy["Core goods"] = chart_base[("Core goods", "y/y")]
+    yy["Core goods"]    = chart_base[("Core goods", "y/y")]
     yy["Core services"] = chart_base[("Core services", "y/y")]
     
-    # Supercore (single level)
     if "Supercore m/m" in chart_base.columns:
         mm["Supercore"] = chart_base["Supercore m/m"]
     if "Supercore y/y" in chart_base.columns:
@@ -495,7 +497,9 @@ def run_cpi_goods_services():
     
     st.markdown("### Core goods/services + Supercore y/y (NSA) – last 12 months")
     st.line_chart(yy)
-    st.caption("Note: Chart lines interpolate across missing months caused by BLS data disruptions.")
+    
+    st.caption("Note: chart lines interpolate across single missing months due to BLS disruptions (tables remain unfilled).")
+
 
 
 
