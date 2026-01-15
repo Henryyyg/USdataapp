@@ -22,6 +22,20 @@ def bls_disruption_warning(message: str):
         f"**Data disruption notice**\n\n{message}",
         icon="⚠️"
     )
+#---------------------------------------------------
+ CHARTING
+#---------------------------------------------------
+def add_charts(chart_df: pd.DataFrame, title: str):
+    """
+    chart_df: index must be datetime (monthly), columns are series to plot
+    """
+    if chart_df is None or chart_df.empty:
+        st.info("No data available to chart.")
+        return
+
+    st.markdown(f"### {title} (chart)")
+    st.line_chart(chart_df)
+
 
 # --------------------------------------------------
 # GENERIC FETCH FUNCTION
@@ -215,6 +229,10 @@ def run_cpi_3dp():
 
     st.subheader("CPI (m/m and y/y, 3dp)")
     st.dataframe(final, use_container_width=True)
+
+    chart_df = out.set_index("Date")[["Headline CPI m/m", "Core CPI m/m", "Headline CPI y/y", "Core CPI y/y"]]
+    add_charts(chart_df, "CPI m/m and y/y")
+
 
 
 # --------------------------------------------------
