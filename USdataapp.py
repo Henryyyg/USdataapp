@@ -287,7 +287,7 @@ def run_nfp():
     df["date"] = df["date"].dt.strftime("%Y-%m")
     df = df.set_index("date")
 
-    st.subheader("Nonfarm Payrolls (m/m change) & Unemployment Rate")
+    st.subheader("Nonfarm Payrolls (m/m change, K) & Unemployment Rate %")
     st.dataframe(df, use_container_width=True)
 
 
