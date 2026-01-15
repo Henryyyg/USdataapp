@@ -230,8 +230,20 @@ def run_cpi_3dp():
     st.subheader("CPI (m/m and y/y, 3dp)")
     st.dataframe(final, use_container_width=True)
 
-    chart_df = out.set_index("Date")[["Headline CPI m/m", "Core CPI m/m", "Headline CPI y/y", "Core CPI y/y"]]
-    add_charts(chart_df, "CPI m/m and y/y")
+    # -----------------------------
+    # Charts (m/m and y/y separate)
+    # -----------------------------
+    chart_df = out.set_index("Date").sort_index()
+    
+    mm_cols = ["Headline CPI m/m", "Core CPI m/m"]
+    yy_cols = ["Headline CPI y/y", "Core CPI y/y"]
+    
+    st.markdown("### CPI m/m (SA) – chart")
+    st.line_chart(chart_df[mm_cols])
+    
+    st.markdown("### CPI y/y (NSA) – chart")
+    st.line_chart(chart_df[yy_cols])
+
 
 
 
