@@ -302,8 +302,6 @@ def run_cpi_goods_services():
 
     # --- Your existing SA/NSA pulls via fetch_bls_series (kept) ---
     series_ids = {
-        "Headline": ("CUSR0000SA0", "CUUR0000SA0"),
-        "Core": ("CUSR0000SA0L1E", "CUUR0000SA0L1E"),
         "Core goods": ("CUSR0000SACL1E", "CUUR0000SACL1E"),
         "Core services": ("CUSR0000SASLE", "CUUR0000SASLE")
     }
