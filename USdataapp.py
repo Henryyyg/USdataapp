@@ -563,28 +563,29 @@ display_df = final.head(24)
 
 if display_df.empty:
     st.info("No PPI → PCE component data available to summarise yet.")
-    return
+else:
+    latest = display_df.iloc[0]
+    prev = display_df.iloc[1] if len(display_df) > 1 else None
 
-latest = display_df.iloc[0]
-prev = display_df.iloc[1] if len(display_df) > 1 else None
+    headline_lines = []
+    for col in display_df.columns:
+        latest_val = latest[col]
+        prev_val = prev[col] if prev is not None else pd.NA
 
-headline_lines = []
-for col in display_df.columns:
-    latest_val = latest[col]
-    prev_val = prev[col] if prev is not None else pd.NA
+        if pd.isna(latest_val):
+            continue
 
-    if pd.isna(latest_val):
-        continue  # skip missing
+        if prev is not None and not pd.isna(prev_val):
+            headline_lines.append(
+                f"{col}: {latest_val:.2f}% (prev. {prev_val:.2f}%)"
+            )
+        else:
+            headline_lines.append(f"{col}: {latest_val:.2f}%")
 
-    if prev is not None and not pd.isna(prev_val):
-        headline_lines.append(f"{col}: {latest_val:.2f}% (prev. {prev_val:.2f}%)")
-    else:
-        headline_lines.append(f"{col}: {latest_val:.2f}%")
+    headline_text = "\n".join(headline_lines)
 
-headline_text = "\n".join(headline_lines)
-
-st.markdown("**PPI → PCE Components (headline format)**")
-st.text_area("", value=headline_text, height=200)
+    st.markdown("**PPI → PCE Components (headline format)**")
+    st.text_area("", value=headline_text, height=200)
 
 
 
