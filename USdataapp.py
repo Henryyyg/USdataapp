@@ -82,10 +82,15 @@ def fetch_bls_series(series_id: str) -> pd.Series:
 #  Supercore
 # --------------------------------------------------
 
-REL_IMPORTANCE_URL = "https://www.bls.gov/cpi/tables/relative-importance/2024.htm"
-
 @st.cache_data(ttl=60*60*24)  # cache for 24h
-def get_supercore_weights():
+def get_latest_rel_importance_url() -> str:
+    """
+    Finds the most recent available BLS CPI relative-importance page.
+    Tries current year, then steps back.
+    """
+    base = "https://www.bls.gov/cpi/tables/relative-importance/{}.htm"
+    this_year = datetime.today().year
+
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -93,7 +98,37 @@ def get_supercore_weights():
         ),
         "Referer": "https://www.bls.gov/cpi/"
     }
-    r = requests.get(REL_IMPORTANCE_URL, headers=headers, timeout=30)
+
+    for y in range(this_year, this_year - 7, -1):
+        url = base.format(y)
+        try:
+            r = requests.get(url, headers=headers, timeout=15)
+            if r.status_code == 200 and "relative importance" in r.text.lower():
+                return url
+        except Exception:
+            continue
+
+    # fallback
+    return base.format(this_year - 1)
+
+
+@st.cache_data(ttl=60*60*24)  # cache for 24h
+def get_supercore_weights():
+    """
+    Pulls CPI-U relative importance weights from the most recent available page.
+    Returns weights as decimals (e.g. 0.58).
+    """
+    rel_url = get_latest_rel_importance_url()
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+        ),
+        "Referer": "https://www.bls.gov/cpi/"
+    }
+
+    r = requests.get(rel_url, headers=headers, timeout=30)
     r.raise_for_status()
 
     t = pd.read_html(r.text)[0]
@@ -104,8 +139,10 @@ def get_supercore_weights():
     t[item_col] = t[item_col].astype(str).str.strip()
     t[cpiu_col] = pd.to_numeric(t[cpiu_col], errors="coerce")
 
-    def pick(label):
+    def pick(label: str) -> float:
         hit = t[t[item_col].str.contains(label, case=False, na=False)]
+        if hit.empty:
+            raise ValueError(f"Could not find weight row for: {label} (source: {rel_url})")
         val = hit.iloc[0][cpiu_col]
         return float(val) / 100.0
 
@@ -157,6 +194,7 @@ def fetch_bls_df(series_map: dict, years_back: int = 5) -> pd.DataFrame:
     for d in dfs[1:]:
         out = out.merge(d, on="Date", how="outer")
     return out.sort_values("Date")
+
 
 
 
@@ -408,9 +446,11 @@ def run_cpi_goods_services():
 
 
     # --- Last 12 months, latest first ---
-    last12 = combined.iloc[-12:].iloc[::-1].round(2)
+    combined = combined.sort_index()
+    last12 = combined.tail(12).iloc[::-1].round(2)
     last12.index = last12.index.strftime("%B %Y")
     last12.index.name = "Month"
+
 
     # Flatten MultiIndex columns (Headline m/m etc.)
     flat_cols = []
