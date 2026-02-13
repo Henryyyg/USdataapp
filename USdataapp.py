@@ -13,6 +13,7 @@ BLS_URL = "https://api.bls.gov/publicAPI/v2/timeseries/data/"
 st.set_page_config(page_title="US Macro Dashboard", layout="wide")
 st.title("📊 US Macro Dashboard (BLS Data)")
 st.write("Choose a dataset from the sidebar and click **Run**.")
+CURRENT_YEAR = datetime.today().year
 
 # -------------------------------
 # BLS disruption warning helper
@@ -216,8 +217,8 @@ def run_cpi_3dp():
 
     payload = {
         "seriesid": list(series.keys()),
-        "startyear": "2023",   # need 12m history for y/y
-        "endyear": "2025",
+        "startyear": str(CURRENT_YEAR - 2),   # need 12m history for y/y
+        "endyear": str(CURRENT_YEAR),
         "registrationkey": API_KEY
     }
 
@@ -305,8 +306,8 @@ def run_nfp():
 
     payload = {
         "seriesid": list(series_ids.keys()),
-        "startyear": "2010",
-        "endyear": "2025",
+        "startyear": str(CURRENT_YEAR - 2),
+        "endyear": str(CURRENT_YEAR),
         "registrationkey": API_KEY
     }
 
@@ -519,8 +520,8 @@ def run_cpi_annualised():
 
     payload = {
         "seriesid": list(series_ids.keys()),
-        "startyear": "2015",
-        "endyear": "2025",
+        "startyear": str(CURRENT_YEAR - 2),
+        "endyear": str(CURRENT_YEAR),
         "registrationkey": API_KEY
     }
 
@@ -656,8 +657,8 @@ def run_ppi_pce():
 
     payload = {
         "seriesid": list(ids.keys()),
-        "startyear": "2023",
-        "endyear": "2025",
+        "startyear": str(CURRENT_YEAR - 2),
+        "endyear": str(CURRENT_YEAR),
         "registrationkey": API_KEY
     }
 
@@ -749,8 +750,8 @@ def run_jolts():
 
     payload = {
         "seriesid": list(series_ids.values()),
-        "startyear": "2015",
-        "endyear": "2025",
+        "startyear": str(CURRENT_YEAR - 2),
+        "endyear": str(CURRENT_YEAR),
         "registrationkey": API_KEY
     }
 
