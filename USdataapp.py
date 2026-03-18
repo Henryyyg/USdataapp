@@ -646,14 +646,15 @@ def run_cpi_annualised():
 def run_ppi_pce():
     
     ids = {
-        "PCU5239405239401": "Portfolio Management PPI",
-        "WPS3022": "Passenger Airline Services",
-        "WPS511101": "Physician Care",
-        "WPS511103": "Home Health & Hospice Care",
-        "WPS511104": "Hospital Outpatient Care",
-        "WPS512101": "Hospital Inpatient Care",
-        "WPS512102": "Nursing Home Care"
-    }
+    "PCU5239405239401": "Portfolio Management PPI",
+    "PCU4811114811111": "Air Passenger Transport PPI",  
+    "WPS3022": "Passenger Airline Services",
+    "WPS511101": "Physician Care",
+    "WPS511103": "Home Health & Hospice Care",
+    "WPS511104": "Hospital Outpatient Care",
+    "WPS512101": "Hospital Inpatient Care",
+    "WPS512102": "Nursing Home Care"
+}
 
     payload = {
         "seriesid": list(ids.keys()),
