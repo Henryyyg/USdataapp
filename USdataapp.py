@@ -648,7 +648,6 @@ def run_ppi_pce():
     ids = {
     "PCU5239405239401": "Portfolio Management PPI",
     "PCU4811114811111": "Air Passenger Transport PPI",  
-    "WPS3022": "Passenger Airline Services",
     "WPS511101": "Physician Care",
     "WPS511103": "Home Health & Hospice Care",
     "WPS511104": "Hospital Outpatient Care",
