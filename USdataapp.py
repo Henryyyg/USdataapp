@@ -411,9 +411,6 @@ def run_nfp():
 # CPI Core Goods & Services (fixed)
 # --------------------------------------------------
 def run_cpi_goods_services():
-    # (optional) your warning call
-    # bls_disruption_warning("...")
-
     # --- Your existing SA/NSA pulls via fetch_bls_series (kept) ---
     series_ids = {
         "Core goods": ("CUSR0000SACL1E", "CUUR0000SACL1E"),
@@ -434,63 +431,61 @@ def run_cpi_goods_services():
         df["y/y"] = (nsa / nsa.shift(12) - 1) * 100
         tables[label] = df
 
-    combined = pd.concat(tables, axis=1)  # <-- IMPORTANT: no dropna()
+    combined = pd.concat(tables, axis=1)
 
     # --- Supercore add-on ---
-    # SA series (m/m)
     SA_MAP = {
         "CUSR0000SASLE": "Core Services SA",
-        "CUSR0000SEHA":  "Rent SA",
-        "CUSR0000SEHC":  "OER SA"
+        "CUSR0000SEHA": "Rent SA",
+        "CUSR0000SEHC": "OER SA"
     }
 
-    # NSA series (y/y)
     NSA_MAP = {
         "CUUR0000SASLE": "Core Services NSA",
-        "CUUR0000SEHA":  "Rent NSA",
-        "CUUR0000SEHC":  "OER NSA"
+        "CUUR0000SEHA": "Rent NSA",
+        "CUUR0000SEHC": "OER NSA"
     }
 
     df_sa = fetch_bls_df(SA_MAP)
     df_nsa = fetch_bls_df(NSA_MAP)
 
+    sc = None
+
     if not df_sa.empty and not df_nsa.empty:
         sc = df_sa.merge(df_nsa, on="Date", how="outer").sort_values("Date")
 
         W_CS, W_RENT, W_OER = get_supercore_weights()
+
         if W_CS is None or W_RENT is None or W_OER is None:
             st.warning("Supercore could not be calculated because BLS relative-importance weights were unavailable.")
             sc = None
-else:
-   W_CS, W_RENT, W_OER = get_supercore_weights()
+        else:
+            DEN = W_CS - W_RENT - W_OER
 
-if W_CS is None or W_RENT is None or W_OER is None:
-    st.warning("Supercore could not be calculated (weights unavailable).")
-    sc = None
+            sc["Supercore Index SA"] = (
+                W_CS * sc["Core Services SA"]
+                - W_RENT * sc["Rent SA"]
+                - W_OER * sc["OER SA"]
+            ) / DEN
 
-else:
-    DEN = W_CS - W_RENT - W_OER
+            sc["Supercore Index NSA"] = (
+                W_CS * sc["Core Services NSA"]
+                - W_RENT * sc["Rent NSA"]
+                - W_OER * sc["OER NSA"]
+            ) / DEN
 
-    sc["Supercore Index SA"] = (
-        W_CS * sc["Core Services SA"]
-        - W_RENT * sc["Rent SA"]
-        - W_OER * sc["OER SA"]
-    ) / DEN
+            sc["Supercore m/m"] = (
+                sc["Supercore Index SA"] / sc["Supercore Index SA"].shift(1) - 1
+            ) * 100
 
-    sc["Supercore Index NSA"] = (
-        W_CS * sc["Core Services NSA"]
-        - W_RENT * sc["Rent NSA"]
-        - W_OER * sc["OER NSA"]
-    ) / DEN
+            sc["Supercore y/y"] = (
+                sc["Supercore Index NSA"] / sc["Supercore Index NSA"].shift(12) - 1
+            ) * 100
 
-    sc["Supercore m/m"] = (sc["Supercore Index SA"] / sc["Supercore Index SA"].shift(1) - 1) * 100
-    sc["Supercore y/y"] = (sc["Supercore Index NSA"] / sc["Supercore Index NSA"].shift(12) - 1) * 100
+            sc_out = sc[["Date", "Supercore m/m", "Supercore y/y"]].set_index("Date")
+            sc_out = sc_out.tail(12)
 
-    sc_out = sc[["Date", "Supercore m/m", "Supercore y/y"]].set_index("Date")
-    sc_out = sc_out.tail(12)
-
-    combined = pd.concat([combined, sc_out], axis=1)
-
+            combined = pd.concat([combined, sc_out], axis=1)
 
     # --- Last 12 months, latest first ---
     combined = combined.sort_index()
@@ -498,8 +493,7 @@ else:
     last12.index = last12.index.strftime("%B %Y")
     last12.index.name = "Month"
 
-
-    # Flatten MultiIndex columns (Headline m/m etc.)
+    # Flatten MultiIndex columns
     flat_cols = []
     for col in last12.columns:
         if isinstance(col, tuple):
@@ -514,37 +508,36 @@ else:
     # -----------------------------
     # Charts (force last 12 months + bridge missing months)
     # -----------------------------
-    # 1) Build a complete last-12-month monthly index (month-start)
     end = combined.sort_index().index.max()
-    end = pd.Timestamp(end.year, end.month, 1)  # month-start
+    end = pd.Timestamp(end.year, end.month, 1)
+
     chart_index = pd.date_range(end=end, periods=12, freq="MS")
-    
-    # 2) Reindex to include missing months (e.g. November), then interpolate for chart only
+
     chart_base = (
         combined.sort_index()
-        .reindex(chart_index)                 # <-- this creates the missing month row
-        .interpolate(method="linear", limit=1)  # <-- bridges a 1-month hole (shutdown-style)
+        .reindex(chart_index)
+        .interpolate(method="linear", limit=1)
     )
-    
+
     mm = pd.DataFrame(index=chart_base.index)
     yy = pd.DataFrame(index=chart_base.index)
-    
-    mm["Core goods"]    = chart_base[("Core goods", "m/m")]
+
+    mm["Core goods"] = chart_base[("Core goods", "m/m")]
     mm["Core services"] = chart_base[("Core services", "m/m")]
-    yy["Core goods"]    = chart_base[("Core goods", "y/y")]
+    yy["Core goods"] = chart_base[("Core goods", "y/y")]
     yy["Core services"] = chart_base[("Core services", "y/y")]
-    
+
     if "Supercore m/m" in chart_base.columns:
         mm["Supercore"] = chart_base["Supercore m/m"]
     if "Supercore y/y" in chart_base.columns:
         yy["Supercore"] = chart_base["Supercore y/y"]
-    
+
     st.markdown("### Core goods/services + Supercore m/m (SA) – last 12 months")
     st.line_chart(mm)
-    
+
     st.markdown("### Core goods/services + Supercore y/y (NSA) – last 12 months")
     st.line_chart(yy)
-    
+
     st.caption("Note: chart lines interpolate across single missing months due to BLS disruptions (tables remain unfilled).")
 
 
