@@ -163,8 +163,6 @@ def get_supercore_weights():
     If blocked, fall back to fixed weights.
     Returns decimals.
     """
-
-    # Stable current workbook from BLS
     url = "https://www.bls.gov/web/cpi/cpi-relative-importance.xlsx"
 
     headers = {
@@ -182,7 +180,6 @@ def get_supercore_weights():
 
         raw = pd.read_excel(io.BytesIO(r.content), sheet_name=0, header=None)
 
-        # BLS workbook layout: column B = item, column C = CPI-U
         t = raw.iloc[:, [1, 2]].copy()
         t.columns = ["Item", "CPI-U"]
 
@@ -204,11 +201,10 @@ def get_supercore_weights():
         if w_cs is not None and w_rent is not None and w_oer is not None:
             return w_cs, w_rent, w_oer
 
+    except Exception:
+        pass
 
-    # ---------------------------------------------------
-    # FALLBACK WEIGHTS
-    # Replace these with the latest weights once you confirm them
-    # ---------------------------------------------------
+    # Fallback weights
     FALLBACK_W_CS = 0.607
     FALLBACK_W_RENT = 0.076
     FALLBACK_W_OER = 0.266
