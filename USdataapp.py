@@ -3,7 +3,6 @@ import pandas as pd
 import requests
 import json
 import io
-import re
 from datetime import datetime
 
 # --------------------------------------------------
@@ -25,9 +24,10 @@ def bls_disruption_warning(message: str):
         f"**Data disruption notice**\n\n{message}",
         icon="⚠️"
     )
-#---------------------------------------------------
+
+# --------------------------------------------------
 # CHARTING
-#---------------------------------------------------
+# --------------------------------------------------
 def add_charts(chart_df: pd.DataFrame, title: str):
     """
     chart_df: index must be datetime (monthly), columns are series to plot
@@ -39,30 +39,41 @@ def add_charts(chart_df: pd.DataFrame, title: str):
     st.markdown(f"### {title} (chart)")
     st.line_chart(chart_df)
 
-
 # --------------------------------------------------
 # GENERIC FETCH FUNCTION
 # --------------------------------------------------
 def fetch_bls(payload):
-    response = requests.post(
-        BLS_URL,
-        data=json.dumps(payload),
-        headers={"Content-Type": "application/json"},
-        timeout=30
-    )
-    data = response.json()
-    if data.get("status") != "REQUEST_SUCCEEDED":
-        st.error("❌ BLS API Error")
+    try:
+        response = requests.post(
+            BLS_URL,
+            data=json.dumps(payload),
+            headers={"Content-Type": "application/json"},
+            timeout=30
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        if data.get("status") != "REQUEST_SUCCEEDED":
+            st.error(f"❌ BLS API Error: {data.get('message', 'Unknown error')}")
+            return None
+
+        return data
+
+    except Exception as e:
+        st.error(f"❌ Error fetching BLS data: {e}")
         return None
-    return data
-
 
 # --------------------------------------------------
-# HELPER: FETCH SINGLE SERIES (WITH API KEY)
+# HELPER: FETCH SINGLE SERIES
 # --------------------------------------------------
-def fetch_bls_series(series_id: str) -> pd.Series:
+def fetch_bls_series(series_id: str, years_back: int = 5) -> pd.Series:
+    endyear = datetime.today().year
+    startyear = endyear - years_back
+
     payload = {
         "seriesid": [series_id],
+        "startyear": str(startyear),
+        "endyear": str(endyear),
         "registrationkey": API_KEY
     }
 
@@ -70,7 +81,14 @@ def fetch_bls_series(series_id: str) -> pd.Series:
     if data is None:
         return None
 
-    obs = data["Results"]["series"][0]["data"]
+    series_list = data.get("Results", {}).get("series", [])
+    if not series_list:
+        return None
+
+    obs = series_list[0].get("data", [])
+    if not obs:
+        return None
+
     df = pd.DataFrame(obs)
     df = df[df["period"].str.startswith("M")].copy()
 
@@ -81,99 +99,79 @@ def fetch_bls_series(series_id: str) -> pd.Series:
 
     return df.set_index("date")["value"].sort_index()
 
-# ---------------------------------------------------
-#  Supercore
 # --------------------------------------------------
-
-@st.cache_data(ttl=60 * 60 * 24)
-def get_latest_rel_importance_xlsx_url() -> str:
+# HELPER: FETCH MULTIPLE SERIES INTO ONE DATAFRAME
+# --------------------------------------------------
+def fetch_bls_df(series_map: dict, years_back: int = 5) -> pd.DataFrame:
     """
-    Use the stable BLS CPI relative-importance workbook first.
-    Fall back to archived yearly XLSX files if needed.
+    series_map: {series_id: friendly_name}
+    returns df with columns: Date + friendly_name columns
     """
-    stable_url = "https://www.bls.gov/web/cpi/cpi-relative-importance.xlsx"
+    endyear = datetime.today().year
+    startyear = endyear - years_back
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/122.0.0.0 Safari/537.36"
-        ),
-        "Referer": "https://www.bls.gov/cpi/"
+    payload = {
+        "seriesid": list(series_map.keys()),
+        "startyear": str(startyear),
+        "endyear": str(endyear),
+        "registrationkey": API_KEY
     }
 
-    # Try stable current workbook first
-    try:
-        r = requests.get(stable_url, headers=headers, timeout=30)
-        r.raise_for_status()
-        return stable_url
-    except Exception:
-        pass
+    data = fetch_bls(payload)
+    if data is None:
+        return pd.DataFrame()
 
-    # Fall back to archived yearly workbooks
-    # Note: year in filename refers to December release year
-    this_year = datetime.today().year
-    for y in range(this_year, this_year - 7, -1):
-        url = f"https://www.bls.gov/cpi/tables/relative-importance/{y}.xlsx"
-        try:
-            r = requests.get(url, headers=headers, timeout=30)
-            r.raise_for_status()
-            return url
-        except Exception:
+    results = data.get("Results", {}).get("series", [])
+    if not results:
+        return pd.DataFrame()
+
+    dfs = []
+    for s in results:
+        sid = s["seriesID"]
+        if sid not in series_map:
             continue
 
-    raise RuntimeError("Could not locate a BLS CPI relative-importance workbook.")
+        name = series_map[sid]
+        df = pd.DataFrame(s["data"])
+        df = df[df["period"].str.startswith("M")].copy()
 
+        df["Date"] = pd.to_datetime(
+            df["year"] + "-" + df["period"].str.replace("M", "", regex=False),
+            format="%Y-%m",
+            errors="coerce"
+        )
+        df[name] = pd.to_numeric(df["value"], errors="coerce")
+        df = df[["Date", name]].sort_values("Date")
+        dfs.append(df)
 
-def _normalise_text(x: str) -> str:
-    x = str(x).strip().lower()
-    x = re.sub(r"\s+", " ", x)
-    return x
+    if not dfs:
+        return pd.DataFrame()
 
+    out = dfs[0]
+    for d in dfs[1:]:
+        out = out.merge(d, on="Date", how="outer")
 
-def _find_cpiu_col(df: pd.DataFrame) -> str:
-    for col in df.columns:
-        c = _normalise_text(col)
-        if "cpi-u" in c or "u.s. city average, cpi-u" in c:
-            return col
-    raise ValueError("Could not find CPI-U column in relative-importance table.")
+    return out.sort_values("Date")
 
-
-def _find_item_col(df: pd.DataFrame) -> str:
-    # Usually first column, but this is safer
-    for col in df.columns:
-        c = _normalise_text(col)
-        if "item" in c or "group" in c:
-            return col
-    return df.columns[0]
-
-
-def _pick_weight(df: pd.DataFrame, item_col: str, value_col: str, patterns: list[str]) -> float:
-    labels = df[item_col].astype(str).map(_normalise_text)
-
-    for pattern in patterns:
-        mask = labels.str.contains(pattern, regex=True, na=False)
-        hit = df.loc[mask, value_col]
-        hit = pd.to_numeric(hit, errors="coerce").dropna()
-        if not hit.empty:
-            return float(hit.iloc[0]) / 100.0
-
-    raise ValueError(f"Could not find weight for any of: {patterns}")
-
-
+# ---------------------------------------------------
+# SUPERCORE WEIGHTS
+# ---------------------------------------------------
 @st.cache_data(ttl=60 * 60 * 24)
 def get_supercore_weights():
     """
     Pull CPI-U relative-importance weights from the BLS workbook.
-
     Returns:
         w_cs   = services less energy services
         w_rent = rent of primary residence
         w_oer  = owners' equivalent rent of residences
-
     All returned as decimals, e.g. 0.646 for 64.6%.
     """
-    url = get_latest_rel_importance_xlsx_url()
+    urls_to_try = [
+        "https://www.bls.gov/web/cpi/cpi-relative-importance.xlsx",
+        "https://www.bls.gov/cpi/tables/relative-importance/current.xlsx",
+        f"https://www.bls.gov/cpi/tables/relative-importance/{CURRENT_YEAR}.xlsx",
+        f"https://www.bls.gov/cpi/tables/relative-importance/{CURRENT_YEAR - 1}.xlsx",
+    ]
 
     headers = {
         "User-Agent": (
@@ -184,68 +182,56 @@ def get_supercore_weights():
         "Referer": "https://www.bls.gov/cpi/"
     }
 
-    try:
-        r = requests.get(url, headers=headers, timeout=30)
-        r.raise_for_status()
+    last_error = None
 
-        # Read workbook from bytes
-        xls = pd.ExcelFile(io.BytesIO(r.content))
+    for url in urls_to_try:
+        try:
+            r = requests.get(url, headers=headers, timeout=30)
+            r.raise_for_status()
 
-        # BLS Table 1 is usually the first sheet, but try all sheets safely
-        df = None
-        for sheet in xls.sheet_names:
-            candidate = pd.read_excel(xls, sheet_name=sheet)
-            cols_norm = [_normalise_text(c) for c in candidate.columns]
-            if any("cpi-u" in c for c in cols_norm):
-                df = candidate
-                break
+            # Read raw sheet with no assumed headers
+            raw = pd.read_excel(io.BytesIO(r.content), sheet_name=0, header=None)
 
-        if df is None or df.empty:
-            raise ValueError("Could not find a valid CPI-U relative-importance sheet.")
+            # BLS workbook layout: use columns B and C (0-indexed => 1 and 2)
+            # B = item label, C = CPI-U
+            if raw.shape[1] < 3:
+                raise ValueError("Relative importance workbook does not have expected columns.")
 
-        df.columns = [str(c).strip() for c in df.columns]
-        item_col = _find_item_col(df)
-        cpiu_col = _find_cpiu_col(df)
+            t = raw.iloc[:, [1, 2]].copy()
+            t.columns = ["Item", "CPI-U"]
 
-        w_cs = _pick_weight(
-            df,
-            item_col,
-            cpiu_col,
-            [
-                r"^services less energy services$",
-                r"services less energy services"
-            ],
-        )
+            t["Item"] = t["Item"].astype(str).str.strip()
+            t["CPI-U"] = pd.to_numeric(t["CPI-U"], errors="coerce")
 
-        w_rent = _pick_weight(
-            df,
-            item_col,
-            cpiu_col,
-            [
-                r"^rent of primary residence$",
-                r"rent of primary residence"
-            ],
-        )
+            # Keep only rows with numeric CPI-U
+            t = t.dropna(subset=["CPI-U"])
+            t = t[t["Item"] != ""].copy()
 
-        w_oer = _pick_weight(
-            df,
-            item_col,
-            cpiu_col,
-            [
-                r"^owners' equivalent rent of residences$",
-                r"^owners.? equivalent rent of residences$",
-                r"owners.? equivalent rent of residences"
-            ],
-        )
+            def pick_exact(label: str):
+                hit = t.loc[t["Item"].str.lower() == label.lower(), "CPI-U"]
+                if hit.empty:
+                    return None
+                return float(hit.iloc[0]) / 100.0
 
-        return w_cs, w_rent, w_oer
+            w_cs = pick_exact("Services less energy services")
+            w_rent = pick_exact("Rent of primary residence")
+            w_oer = pick_exact("Owners' equivalent rent of residences")
 
-    except Exception as e:
-        st.error(f"Unable to fetch Supercore weights from BLS workbook: {e}")
-        return None, None, None
+            if w_cs is None or w_rent is None or w_oer is None:
+                last_error = (
+                    "Could not find one or more required rows. "
+                    f"Available sample rows: {t['Item'].head(25).tolist()}"
+                )
+                continue
 
+            return w_cs, w_rent, w_oer
 
+        except Exception as e:
+            last_error = str(e)
+            continue
 
+    st.error(f"Unable to fetch Supercore weights from BLS workbook: {last_error}")
+    return None, None, None
 
 # --------------------------------------------------
 # CPI 3dp
@@ -255,7 +241,6 @@ def run_cpi_3dp():
         "- October m/m CPI was not released; short-term momentum may be distorted around this period.\n"
     )
 
-    # SA for m/m + NSA for y/y
     series = {
         "CUSR0000SA0": "Headline CPI SA",
         "CUSR0000SA0L1E": "Core CPI SA",
@@ -265,7 +250,7 @@ def run_cpi_3dp():
 
     payload = {
         "seriesid": list(series.keys()),
-        "startyear": str(CURRENT_YEAR - 2),   # need 12m history for y/y
+        "startyear": str(CURRENT_YEAR - 2),
         "endyear": str(CURRENT_YEAR),
         "registrationkey": API_KEY
     }
@@ -274,7 +259,6 @@ def run_cpi_3dp():
     if data is None:
         return
 
-    # Build one combined dataframe of index levels
     dfs = []
     for s in data["Results"]["series"]:
         sid = s["seriesID"]
@@ -283,7 +267,7 @@ def run_cpi_3dp():
         df = df[df["period"].str.startswith("M")].copy()
 
         df["Date"] = pd.to_datetime(
-            df["year"] + "-" + df["period"].str.replace("M", ""),
+            df["year"] + "-" + df["period"].str.replace("M", "", regex=False),
             format="%Y-%m",
             errors="coerce"
         )
@@ -297,56 +281,44 @@ def run_cpi_3dp():
 
     out = out.sort_values("Date")
 
-    # ---- Compute changes ----
-    # m/m from SA (continuity-safe: blanks if prior month missing)
     out["Headline CPI m/m"] = ((out["Headline CPI SA"] / out["Headline CPI SA"].shift(1) - 1) * 100)
     out.loc[out["Headline CPI SA"].isna() | out["Headline CPI SA"].shift(1).isna(), "Headline CPI m/m"] = pd.NA
 
     out["Core CPI m/m"] = ((out["Core CPI SA"] / out["Core CPI SA"].shift(1) - 1) * 100)
     out.loc[out["Core CPI SA"].isna() | out["Core CPI SA"].shift(1).isna(), "Core CPI m/m"] = pd.NA
 
-    # y/y from NSA
     out["Headline CPI y/y"] = ((out["Headline CPI NSA"] / out["Headline CPI NSA"].shift(12) - 1) * 100)
     out["Core CPI y/y"] = ((out["Core CPI NSA"] / out["Core CPI NSA"].shift(12) - 1) * 100)
 
-    # Keep just the 4 prints
     final = out[["Date", "Headline CPI m/m", "Core CPI m/m", "Headline CPI y/y", "Core CPI y/y"]]
-
-    # Last 12 months, newest first
     final = final.sort_values("Date", ascending=False).head(12).copy()
     final["Date"] = final["Date"].dt.strftime("%Y-%m")
 
-    # Format to always show 3dp (no % sign)
     for col in ["Headline CPI m/m", "Core CPI m/m", "Headline CPI y/y", "Core CPI y/y"]:
         final[col] = final[col].apply(lambda x: "" if pd.isna(x) else f"{x:.3f}")
 
     st.subheader("CPI (m/m and y/y, 3dp)")
     st.dataframe(final, use_container_width=True)
 
-    # -----------------------------
-    # Charts (m/m and y/y separate)
-    # -----------------------------
     chart_df = out.set_index("Date").sort_index()
-    
+
     mm_cols = ["Headline CPI m/m", "Core CPI m/m"]
     yy_cols = ["Headline CPI y/y", "Core CPI y/y"]
-    
+
     st.markdown("### CPI m/m (SA) – chart")
     st.line_chart(chart_df[mm_cols])
-    
+
     st.markdown("### CPI y/y (NSA) – chart")
     st.line_chart(chart_df[yy_cols])
-
-
-
 
 # --------------------------------------------------
 # NFP & Unemployment Rate
 # --------------------------------------------------
 def run_nfp():
     bls_disruption_warning(
-    "- The October Unemployment rate was never released.\n"
-)
+        "- The October Unemployment rate was never released.\n"
+    )
+
     series_ids = {
         "CES0000000001": "Nonfarm Payrolls Level",
         "LNS14000000": "Unemployment Rate"
@@ -384,43 +356,29 @@ def run_nfp():
         df = df.sort_values("date")
         dfs.append(df)
 
-    # Merge level + unemployment
     df = dfs[0]
     for extra in dfs[1:]:
         df = df.merge(extra, on="date", how="outer")
 
-    # --------------------------------------------------
-    # Calculate NFP m/m change (thousands)
-    # --------------------------------------------------
     df["NFP m/m change"] = df["Nonfarm Payrolls Level"].diff()
-
-    # Rolling averages of the CHANGE
     df["NFP 3m avg"] = df["NFP m/m change"].rolling(3).mean()
     df["NFP 6m avg"] = df["NFP m/m change"].rolling(6).mean()
     df["NFP 12m avg"] = df["NFP m/m change"].rolling(12).mean()
 
-    # Clean up
     df = df.drop(columns=["Nonfarm Payrolls Level"])
     df = df.round(1)
 
-    # Latest first
     df = df.sort_values("date", ascending=False).head(24)
-
-    # Remove timestamp
     df["date"] = df["date"].dt.strftime("%Y-%m")
     df = df.set_index("date")
 
     st.subheader("Nonfarm Payrolls (m/m change, K) & Unemployment Rate %")
     st.dataframe(df, use_container_width=True)
 
-
-
-
 # --------------------------------------------------
-# CPI Core Goods & Services (fixed)
+# CPI Core Goods & Services + Supercore
 # --------------------------------------------------
 def run_cpi_goods_services():
-    # --- Your existing SA/NSA pulls via fetch_bls_series (kept) ---
     series_ids = {
         "Core goods": ("CUSR0000SACL1E", "CUUR0000SACL1E"),
         "Core services": ("CUSR0000SASLE", "CUUR0000SASLE")
@@ -442,7 +400,6 @@ def run_cpi_goods_services():
 
     combined = pd.concat(tables, axis=1)
 
-    # --- Supercore add-on ---
     SA_MAP = {
         "CUSR0000SASLE": "Core Services SA",
         "CUSR0000SEHA": "Rent SA",
@@ -471,38 +428,40 @@ def run_cpi_goods_services():
         else:
             DEN = W_CS - W_RENT - W_OER
 
-            sc["Supercore Index SA"] = (
-                W_CS * sc["Core Services SA"]
-                - W_RENT * sc["Rent SA"]
-                - W_OER * sc["OER SA"]
-            ) / DEN
+            if pd.isna(DEN) or abs(DEN) < 1e-12:
+                st.error("Supercore denominator is invalid.")
+                sc = None
+            else:
+                sc["Supercore Index SA"] = (
+                    W_CS * sc["Core Services SA"]
+                    - W_RENT * sc["Rent SA"]
+                    - W_OER * sc["OER SA"]
+                ) / DEN
 
-            sc["Supercore Index NSA"] = (
-                W_CS * sc["Core Services NSA"]
-                - W_RENT * sc["Rent NSA"]
-                - W_OER * sc["OER NSA"]
-            ) / DEN
+                sc["Supercore Index NSA"] = (
+                    W_CS * sc["Core Services NSA"]
+                    - W_RENT * sc["Rent NSA"]
+                    - W_OER * sc["OER NSA"]
+                ) / DEN
 
-            sc["Supercore m/m"] = (
-                sc["Supercore Index SA"] / sc["Supercore Index SA"].shift(1) - 1
-            ) * 100
+                sc["Supercore m/m"] = (
+                    sc["Supercore Index SA"] / sc["Supercore Index SA"].shift(1) - 1
+                ) * 100
 
-            sc["Supercore y/y"] = (
-                sc["Supercore Index NSA"] / sc["Supercore Index NSA"].shift(12) - 1
-            ) * 100
+                sc["Supercore y/y"] = (
+                    sc["Supercore Index NSA"] / sc["Supercore Index NSA"].shift(12) - 1
+                ) * 100
 
-            sc_out = sc[["Date", "Supercore m/m", "Supercore y/y"]].set_index("Date")
-            sc_out = sc_out.tail(12)
+                sc_out = sc[["Date", "Supercore m/m", "Supercore y/y"]].set_index("Date")
+                sc_out = sc_out.tail(12)
 
-            combined = pd.concat([combined, sc_out], axis=1)
+                combined = pd.concat([combined, sc_out], axis=1)
 
-    # --- Last 12 months, latest first ---
     combined = combined.sort_index()
     last12 = combined.tail(12).iloc[::-1].round(2)
     last12.index = last12.index.strftime("%B %Y")
     last12.index.name = "Month"
 
-    # Flatten MultiIndex columns
     flat_cols = []
     for col in last12.columns:
         if isinstance(col, tuple):
@@ -514,9 +473,6 @@ def run_cpi_goods_services():
     st.subheader("CPI Core Goods & Services (m/m SA, y/y NSA) + Supercore (Core Services ex-Rent+OER)")
     st.dataframe(last12, use_container_width=True)
 
-    # -----------------------------
-    # Charts (force last 12 months + bridge missing months)
-    # -----------------------------
     end = combined.sort_index().index.max()
     end = pd.Timestamp(end.year, end.month, 1)
 
@@ -549,9 +505,6 @@ def run_cpi_goods_services():
 
     st.caption("Note: chart lines interpolate across single missing months due to BLS disruptions (tables remain unfilled).")
 
-
-
-
 # --------------------------------------------------
 # Annualised CPI (3m & 6m)
 # --------------------------------------------------
@@ -578,8 +531,6 @@ def run_cpi_annualised():
         return
 
     dfs = []
-
-    # Convert BLS data → tidy DataFrames
     for s in data["Results"]["series"]:
         sid = s["seriesID"]
         name = series_ids[sid]
@@ -603,19 +554,15 @@ def run_cpi_annualised():
         df = df.sort_values("date")
         dfs.append(df)
 
-    # Merge Headline + Core
     cpi = dfs[0]
     for extra in dfs[1:]:
         cpi = cpi.merge(extra, on="date", how="outer")
 
-    # --------------------------------------------------
-    # Make a complete monthly index (so October 2025 exists as NaN)
-    # --------------------------------------------------
     cpi = cpi.sort_values("date")
     full_range = pd.date_range(
         start=cpi["date"].min(),
         end=cpi["date"].max(),
-        freq="MS"          # Month start frequency
+        freq="MS"
     )
 
     cpi = (
@@ -626,24 +573,15 @@ def run_cpi_annualised():
         .reset_index()
     )
 
-    # --------------------------------------------------
-    # Rename for clarity
-    # --------------------------------------------------
     cpi = cpi.rename(columns={
         "Headline CPI SA": "Headline CPI Index SA",
         "Core CPI SA": "Core CPI Index SA"
     })
 
-    # --------------------------------------------------
-    # Annualised CPI calculations with continuity checks
-    # --------------------------------------------------
     for col in ["Headline CPI Index SA", "Core CPI Index SA"]:
-        # Base ratios
         ratio_3m = cpi[col] / cpi[col].shift(3)
         ratio_6m = cpi[col] / cpi[col].shift(6)
 
-        # Require a full, uninterrupted history in the window:
-        # 3m ann: need t, t-1, t-2, t-3 all non-NaN
         valid_3m = (
             cpi[col].notna()
             & cpi[col].shift(1).notna()
@@ -651,7 +589,6 @@ def run_cpi_annualised():
             & cpi[col].shift(3).notna()
         )
 
-        # 6m ann: need t, t-1, ..., t-6 all non-NaN
         valid_6m = (
             cpi[col].notna()
             & cpi[col].shift(1).notna()
@@ -665,43 +602,35 @@ def run_cpi_annualised():
         ann_3m = ((ratio_3m ** 4) - 1) * 100
         ann_6m = ((ratio_6m ** 2) - 1) * 100
 
-        # Drop values where the window is broken by missing months
         ann_3m[~valid_3m] = pd.NA
         ann_6m[~valid_6m] = pd.NA
 
         cpi[f"{col} 3m ann"] = ann_3m
         cpi[f"{col} 6m ann"] = ann_6m
 
-    # Round annualised values
     ann_cols = [col for col in cpi.columns if "ann" in col]
     cpi[ann_cols] = cpi[ann_cols].astype("float").round(3)
 
-    # --------------------------------------------------
-    # Prepare display table
-    # --------------------------------------------------
     cpi = cpi.sort_values("date", ascending=False).head(12)
-
     cpi["date"] = cpi["date"].dt.strftime("%Y-%m")
     cpi = cpi.set_index("date")
 
     st.subheader("Annualised CPI (3m & 6m %)")
     st.dataframe(cpi, use_container_width=True)
 
-
 # --------------------------------------------------
 # PPI → PCE Components
 # --------------------------------------------------
 def run_ppi_pce():
-    
     ids = {
-    "PCU5239405239401": "Portfolio Management PPI",
-    "PCU4811114811111": "Air Passenger Transport PPI",  
-    "WPS511101": "Physician Care",
-    "WPS511103": "Home Health & Hospice Care",
-    "WPS511104": "Hospital Outpatient Care",
-    "WPS512101": "Hospital Inpatient Care",
-    "WPS512102": "Nursing Home Care"
-}
+        "PCU5239405239401": "Portfolio Management PPI",
+        "PCU4811114811111": "Air Passenger Transport PPI",
+        "WPS511101": "Physician Care",
+        "WPS511103": "Home Health & Hospice Care",
+        "WPS511104": "Hospital Outpatient Care",
+        "WPS512101": "Hospital Inpatient Care",
+        "WPS512102": "Nursing Home Care"
+    }
 
     payload = {
         "seriesid": list(ids.keys()),
@@ -721,8 +650,11 @@ def run_ppi_pce():
         name = ids[sid]
 
         df = pd.DataFrame(s["data"])
+        df = df[df["period"].str.startswith("M")].copy()
+
         df["Date"] = pd.to_datetime(
-            df["year"] + "-" + df["period"].str.replace("M", ""),
+            df["year"] + "-" + df["period"].str.replace("M", "", regex=False),
+            format="%Y-%m",
             errors="coerce"
         )
         df["Value"] = pd.to_numeric(df["value"], errors="coerce")
@@ -736,16 +668,11 @@ def run_ppi_pce():
         final = final.merge(x, on="Date", how="outer")
 
     final = final.sort_values("Date", ascending=False).set_index("Date").round(2)
-
-    # Fix timestamp formatting
     final.index = final.index.strftime("%Y-%m")
 
     st.subheader("PPI → PCE Components (m/m %)")
     st.dataframe(final.head(24), use_container_width=True)
 
-    # --------------------------------------------------
-    # Headline-style summary box (latest vs previous)
-    # --------------------------------------------------
     display_df = final.head(24)
 
     if display_df.empty:
@@ -774,15 +701,10 @@ def run_ppi_pce():
         st.markdown("**PPI → PCE Components (headline format)**")
         st.text_area("", value=headline_text, height=200)
 
-
-
-
-
 # --------------------------------------------------
 # JOLTS
 # --------------------------------------------------
 def run_jolts():
-
     series_ids = {
         "Headline JOLTS": "JTS000000000000000JOL",
         "Vacancy Rate": "JTS000000000000000JOR",
@@ -818,22 +740,15 @@ def run_jolts():
                     "Date": f"{e['year']}-{e['period'][1:]}",
                     "Series": name,
                     "Value": pd.to_numeric(e["value"], errors="coerce")
-
                 })
 
     df = pd.DataFrame(rows)
     df = df.pivot(index="Date", columns="Series", values="Value")
-
-    # Column order match
     df = df.reindex(columns=list(series_ids.keys()))
-
-    # Newest → oldest
     df = df.sort_index(ascending=False)
 
     st.subheader("JOLTS Data (Levels in thousands, Rates in %)")
     st.dataframe(df.round(2), use_container_width=True)
-
-
 
 # --------------------------------------------------
 # SIDEBAR SELECTION
@@ -851,7 +766,6 @@ choice = st.sidebar.radio(
         "NFP & Unemployment"
     ]
 )
-
 
 if st.sidebar.button("Run"):
     if choice == "CPI (m/m, 3dp)":
