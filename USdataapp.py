@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import requests
 import json
+import io
+import re
 from datetime import datetime
 
 # --------------------------------------------------
@@ -83,186 +85,164 @@ def fetch_bls_series(series_id: str) -> pd.Series:
 #  Supercore
 # --------------------------------------------------
 
-@st.cache_data(ttl=60*60*24)
-def get_latest_rel_importance_url() -> str:
+@st.cache_data(ttl=60 * 60 * 24)
+def get_latest_rel_importance_xlsx_url() -> str:
     """
-    Finds the most recent available BLS CPI relative-importance page.
-    Falls back to a known working URL if needed.
+    Use the stable BLS CPI relative-importance workbook first.
+    Fall back to archived yearly XLSX files if needed.
     """
-    base = "https://www.bls.gov/cpi/tables/relative-importance/{}.htm"
-    this_year = datetime.today().year
+    stable_url = "https://www.bls.gov/web/cpi/cpi-relative-importance.xlsx"
 
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
         ),
         "Referer": "https://www.bls.gov/cpi/"
     }
 
-    # Try current year backwards
-    for y in range(this_year, this_year - 7, -1):
-        url = base.format(y)
-        try:
-            r = requests.get(url, headers=headers, timeout=15)
-            if r.status_code != 200:
-                continue
+    # Try stable current workbook first
+    try:
+        r = requests.get(stable_url, headers=headers, timeout=30)
+        r.raise_for_status()
+        return stable_url
+    except Exception:
+        pass
 
-            tables = pd.read_html(r.text)
-            if len(tables) > 0:
-                return url
+    # Fall back to archived yearly workbooks
+    # Note: year in filename refers to December release year
+    this_year = datetime.today().year
+    for y in range(this_year, this_year - 7, -1):
+        url = f"https://www.bls.gov/cpi/tables/relative-importance/{y}.xlsx"
+        try:
+            r = requests.get(url, headers=headers, timeout=30)
+            r.raise_for_status()
+            return url
         except Exception:
             continue
 
-    # Hard fallback
-    return "https://www.bls.gov/cpi/tables/relative-importance/2024.htm"
+    raise RuntimeError("Could not locate a BLS CPI relative-importance workbook.")
 
 
-@st.cache_data(ttl=60*60*24)
+def _normalise_text(x: str) -> str:
+    x = str(x).strip().lower()
+    x = re.sub(r"\s+", " ", x)
+    return x
+
+
+def _find_cpiu_col(df: pd.DataFrame) -> str:
+    for col in df.columns:
+        c = _normalise_text(col)
+        if "cpi-u" in c or "u.s. city average, cpi-u" in c:
+            return col
+    raise ValueError("Could not find CPI-U column in relative-importance table.")
+
+
+def _find_item_col(df: pd.DataFrame) -> str:
+    # Usually first column, but this is safer
+    for col in df.columns:
+        c = _normalise_text(col)
+        if "item" in c or "group" in c:
+            return col
+    return df.columns[0]
+
+
+def _pick_weight(df: pd.DataFrame, item_col: str, value_col: str, patterns: list[str]) -> float:
+    labels = df[item_col].astype(str).map(_normalise_text)
+
+    for pattern in patterns:
+        mask = labels.str.contains(pattern, regex=True, na=False)
+        hit = df.loc[mask, value_col]
+        hit = pd.to_numeric(hit, errors="coerce").dropna()
+        if not hit.empty:
+            return float(hit.iloc[0]) / 100.0
+
+    raise ValueError(f"Could not find weight for any of: {patterns}")
+
+
+@st.cache_data(ttl=60 * 60 * 24)
 def get_supercore_weights():
     """
-    Pull CPI-U relative-importance weights from the most recent available page.
-    Returns weights as decimals, or None triplet if unavailable.
+    Pull CPI-U relative-importance weights from the BLS workbook.
+
+    Returns:
+        w_cs   = services less energy services
+        w_rent = rent of primary residence
+        w_oer  = owners' equivalent rent of residences
+
+    All returned as decimals, e.g. 0.646 for 64.6%.
     """
-    rel_url = get_latest_rel_importance_url()
+    url = get_latest_rel_importance_xlsx_url()
 
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
         ),
         "Referer": "https://www.bls.gov/cpi/"
     }
 
     try:
-        r = requests.get(rel_url, headers=headers, timeout=30)
+        r = requests.get(url, headers=headers, timeout=30)
         r.raise_for_status()
-        tables = pd.read_html(r.text)
-        if not tables:
-            return None, None, None
-        t = tables[0]
-    except Exception:
-        return None, None, None
 
-    t.columns = [str(c).strip() for c in t.columns]
-    item_col = t.columns[0]
+        # Read workbook from bytes
+        xls = pd.ExcelFile(io.BytesIO(r.content))
 
-    try:
-        cpiu_col = next(c for c in t.columns if "CPI-U" in c)
-    except StopIteration:
-        return None, None, None
+        # BLS Table 1 is usually the first sheet, but try all sheets safely
+        df = None
+        for sheet in xls.sheet_names:
+            candidate = pd.read_excel(xls, sheet_name=sheet)
+            cols_norm = [_normalise_text(c) for c in candidate.columns]
+            if any("cpi-u" in c for c in cols_norm):
+                df = candidate
+                break
 
-    t[item_col] = t[item_col].astype(str).str.strip()
-    t[cpiu_col] = pd.to_numeric(t[cpiu_col], errors="coerce")
+        if df is None or df.empty:
+            raise ValueError("Could not find a valid CPI-U relative-importance sheet.")
 
-    def pick(label: str):
-        hit = t[t[item_col].str.contains(label, case=False, na=False)]
-        if hit.empty:
-            return None
-        val = hit.iloc[0][cpiu_col]
-        if pd.isna(val):
-            return None
-        return float(val) / 100.0
+        df.columns = [str(c).strip() for c in df.columns]
+        item_col = _find_item_col(df)
+        cpiu_col = _find_cpiu_col(df)
 
-    w_cs = pick("Services less energy services")
-    w_rent = pick("Rent of primary residence")
-    w_oer = pick("Owners' equivalent rent of residences")
-
-    if w_cs is None or w_rent is None or w_oer is None:
-        return None, None, None
-
-    return w_cs, w_rent, w_oer
-
-
-@st.cache_data(ttl=60*60*24)
-def get_supercore_weights():
-    """
-    Pull CPI-U relative-importance weights from the most recent available page.
-    """
-    rel_url = get_latest_rel_importance_url()
-
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
-        ),
-        "Referer": "https://www.bls.gov/cpi/"
-    }
-
-    try:
-        r = requests.get(rel_url, headers=headers, timeout=30)
-        r.raise_for_status()
-        t = pd.read_html(r.text)[0]
-    except Exception as e:
-        st.error(f"Unable to fetch Supercore weights from BLS: {e}")
-        return None, None, None
-
-    t.columns = [str(c).strip() for c in t.columns]
-    item_col = t.columns[0]
-    cpiu_col = next(c for c in t.columns if "CPI-U" in c)
-
-    t[item_col] = t[item_col].astype(str).str.strip()
-    t[cpiu_col] = pd.to_numeric(t[cpiu_col], errors="coerce")
-
-    def pick(label: str) -> float:
-        hit = t[t[item_col].str.contains(label, case=False, na=False)]
-        if hit.empty:
-            raise ValueError(f"Could not find weight row for: {label}")
-        val = hit.iloc[0][cpiu_col]
-        return float(val) / 100.0
-
-    try:
-        w_cs = pick("Services less energy services")
-        w_rent = pick("Rent of primary residence")
-        w_oer = pick("Owners' equivalent rent of residences")
-    except Exception as e:
-        st.error(f"Unable to parse Supercore weights: {e}")
-        return None, None, None
-
-    return w_cs, w_rent, w_oer
-
-
-def fetch_bls_df(series_map: dict, years_back: int = 5) -> pd.DataFrame:
-    """
-    series_map: {series_id: friendly_name}
-    years_back: how many years of history to pull (rolling)
-    returns df with columns: Date + friendly_name columns
-    """
-    endyear = datetime.today().year
-    startyear = endyear - years_back
-
-    payload = {
-        "seriesid": list(series_map.keys()),
-        "startyear": str(startyear),
-        "endyear": str(endyear),
-        "registrationkey": API_KEY
-    }
-
-    data = fetch_bls(payload)
-    if data is None:
-        return pd.DataFrame()
-
-    dfs = []
-    for s in data["Results"]["series"]:
-        sid = s["seriesID"]
-        name = series_map[sid]
-
-        df = pd.DataFrame(s["data"])
-        df = df[df["period"].str.startswith("M")].copy()
-
-        df["Date"] = pd.to_datetime(
-            df["year"] + "-" + df["period"].str.replace("M", ""),
-            format="%Y-%m",
-            errors="coerce"
+        w_cs = _pick_weight(
+            df,
+            item_col,
+            cpiu_col,
+            [
+                r"^services less energy services$",
+                r"services less energy services"
+            ],
         )
-        df[name] = pd.to_numeric(df["value"], errors="coerce")
-        df = df[["Date", name]].sort_values("Date")
-        dfs.append(df)
 
-    out = dfs[0]
-    for d in dfs[1:]:
-        out = out.merge(d, on="Date", how="outer")
-    return out.sort_values("Date")
+        w_rent = _pick_weight(
+            df,
+            item_col,
+            cpiu_col,
+            [
+                r"^rent of primary residence$",
+                r"rent of primary residence"
+            ],
+        )
+
+        w_oer = _pick_weight(
+            df,
+            item_col,
+            cpiu_col,
+            [
+                r"^owners' equivalent rent of residences$",
+                r"^owners.? equivalent rent of residences$",
+                r"owners.? equivalent rent of residences"
+            ],
+        )
+
+        return w_cs, w_rent, w_oer
+
+    except Exception as e:
+        st.error(f"Unable to fetch Supercore weights from BLS workbook: {e}")
+        return None, None, None
 
 
 
