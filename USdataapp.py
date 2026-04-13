@@ -113,11 +113,42 @@ def get_latest_rel_importance_url() -> str:
     return base.format(this_year - 1)
 
 
-@st.cache_data(ttl=60*60*24)  # cache for 24h
+@st.cache_data(ttl=60*60*24)
+def get_latest_rel_importance_url() -> str:
+    """
+    Find the most recent available BLS CPI relative-importance page.
+    """
+    base = "https://www.bls.gov/cpi/tables/relative-importance/{}.htm"
+    this_year = datetime.today().year
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+        ),
+        "Referer": "https://www.bls.gov/cpi/"
+    }
+
+    for y in range(this_year, this_year - 7, -1):
+        url = base.format(y)
+        try:
+            r = requests.get(url, headers=headers, timeout=15)
+            if r.status_code != 200:
+                continue
+
+            tables = pd.read_html(r.text)
+            if len(tables) > 0:
+                return url
+        except Exception:
+            continue
+
+    raise ValueError("Could not find a valid BLS relative-importance table.")
+
+
+@st.cache_data(ttl=60*60*24)
 def get_supercore_weights():
     """
-    Pulls CPI-U relative importance weights from the most recent available page.
-    Returns weights as decimals (e.g. 0.58).
+    Pull CPI-U relative-importance weights from the most recent available page.
     """
     rel_url = get_latest_rel_importance_url()
 
@@ -129,10 +160,14 @@ def get_supercore_weights():
         "Referer": "https://www.bls.gov/cpi/"
     }
 
-    r = requests.get(rel_url, headers=headers, timeout=30)
-    r.raise_for_status()
+    try:
+        r = requests.get(rel_url, headers=headers, timeout=30)
+        r.raise_for_status()
+        t = pd.read_html(r.text)[0]
+    except Exception as e:
+        st.error(f"Unable to fetch Supercore weights from BLS: {e}")
+        return None, None, None
 
-    t = pd.read_html(r.text)[0]
     t.columns = [str(c).strip() for c in t.columns]
     item_col = t.columns[0]
     cpiu_col = next(c for c in t.columns if "CPI-U" in c)
@@ -143,13 +178,17 @@ def get_supercore_weights():
     def pick(label: str) -> float:
         hit = t[t[item_col].str.contains(label, case=False, na=False)]
         if hit.empty:
-            raise ValueError(f"Could not find weight row for: {label} (source: {rel_url})")
+            raise ValueError(f"Could not find weight row for: {label}")
         val = hit.iloc[0][cpiu_col]
         return float(val) / 100.0
 
-    w_cs   = pick("Services less energy services")
-    w_rent = pick("Rent of primary residence")
-    w_oer  = pick("Owners' equivalent rent of residences")
+    try:
+        w_cs = pick("Services less energy services")
+        w_rent = pick("Rent of primary residence")
+        w_oer = pick("Owners' equivalent rent of residences")
+    except Exception as e:
+        st.error(f"Unable to parse Supercore weights: {e}")
+        return None, None, None
 
     return w_cs, w_rent, w_oer
 
@@ -419,7 +458,11 @@ def run_cpi_goods_services():
         sc = df_sa.merge(df_nsa, on="Date", how="outer").sort_values("Date")
 
         W_CS, W_RENT, W_OER = get_supercore_weights()
-        DEN = W_CS - W_RENT - W_OER
+        if W_CS is None or W_RENT is None or W_OER is None:
+            st.warning("Supercore could not be calculated because BLS relative-importance weights were unavailable.")
+            sc = None
+else:
+    DEN = W_CS - W_RENT - W_OER
 
         sc["Supercore Index SA"] = (
             W_CS * sc["Core Services SA"]
