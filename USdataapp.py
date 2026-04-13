@@ -83,40 +83,11 @@ def fetch_bls_series(series_id: str) -> pd.Series:
 #  Supercore
 # --------------------------------------------------
 
-@st.cache_data(ttl=60*60*24)  # cache for 24h
-def get_latest_rel_importance_url() -> str:
-    """
-    Finds the most recent available BLS CPI relative-importance page.
-    Tries current year, then steps back.
-    """
-    base = "https://www.bls.gov/cpi/tables/relative-importance/{}.htm"
-    this_year = datetime.today().year
-
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
-        ),
-        "Referer": "https://www.bls.gov/cpi/"
-    }
-
-    for y in range(this_year, this_year - 7, -1):
-        url = base.format(y)
-        try:
-            r = requests.get(url, headers=headers, timeout=15)
-            if r.status_code == 200 and "relative importance" in r.text.lower():
-                return url
-        except Exception:
-            continue
-
-    # fallback
-    return base.format(this_year - 1)
-
-
 @st.cache_data(ttl=60*60*24)
 def get_latest_rel_importance_url() -> str:
     """
-    Find the most recent available BLS CPI relative-importance page.
+    Finds the most recent available BLS CPI relative-importance page.
+    Falls back to a known working URL if needed.
     """
     base = "https://www.bls.gov/cpi/tables/relative-importance/{}.htm"
     this_year = datetime.today().year
@@ -129,6 +100,7 @@ def get_latest_rel_importance_url() -> str:
         "Referer": "https://www.bls.gov/cpi/"
     }
 
+    # Try current year backwards
     for y in range(this_year, this_year - 7, -1):
         url = base.format(y)
         try:
@@ -142,7 +114,64 @@ def get_latest_rel_importance_url() -> str:
         except Exception:
             continue
 
-    raise ValueError("Could not find a valid BLS relative-importance table.")
+    # Hard fallback
+    return "https://www.bls.gov/cpi/tables/relative-importance/2024.htm"
+
+
+@st.cache_data(ttl=60*60*24)
+def get_supercore_weights():
+    """
+    Pull CPI-U relative-importance weights from the most recent available page.
+    Returns weights as decimals, or None triplet if unavailable.
+    """
+    rel_url = get_latest_rel_importance_url()
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+        ),
+        "Referer": "https://www.bls.gov/cpi/"
+    }
+
+    try:
+        r = requests.get(rel_url, headers=headers, timeout=30)
+        r.raise_for_status()
+        tables = pd.read_html(r.text)
+        if not tables:
+            return None, None, None
+        t = tables[0]
+    except Exception:
+        return None, None, None
+
+    t.columns = [str(c).strip() for c in t.columns]
+    item_col = t.columns[0]
+
+    try:
+        cpiu_col = next(c for c in t.columns if "CPI-U" in c)
+    except StopIteration:
+        return None, None, None
+
+    t[item_col] = t[item_col].astype(str).str.strip()
+    t[cpiu_col] = pd.to_numeric(t[cpiu_col], errors="coerce")
+
+    def pick(label: str):
+        hit = t[t[item_col].str.contains(label, case=False, na=False)]
+        if hit.empty:
+            return None
+        val = hit.iloc[0][cpiu_col]
+        if pd.isna(val):
+            return None
+        return float(val) / 100.0
+
+    w_cs = pick("Services less energy services")
+    w_rent = pick("Rent of primary residence")
+    w_oer = pick("Owners' equivalent rent of residences")
+
+    if w_cs is None or w_rent is None or w_oer is None:
+        return None, None, None
+
+    return w_cs, w_rent, w_oer
 
 
 @st.cache_data(ttl=60*60*24)
