@@ -204,8 +204,6 @@ def get_supercore_weights():
         if w_cs is not None and w_rent is not None and w_oer is not None:
             return w_cs, w_rent, w_oer
 
-    except Exception as e:
-        st.warning(f"BLS workbook fetch failed, using fallback weights instead: {e}")
 
     # ---------------------------------------------------
     # FALLBACK WEIGHTS
