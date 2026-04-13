@@ -159,19 +159,13 @@ def fetch_bls_df(series_map: dict, years_back: int = 5) -> pd.DataFrame:
 @st.cache_data(ttl=60 * 60 * 24)
 def get_supercore_weights():
     """
-    Pull CPI-U relative-importance weights from the BLS workbook.
-    Returns:
-        w_cs   = services less energy services
-        w_rent = rent of primary residence
-        w_oer  = owners' equivalent rent of residences
-    All returned as decimals, e.g. 0.646 for 64.6%.
+    Try BLS current workbook first.
+    If blocked, fall back to fixed weights.
+    Returns decimals.
     """
-    urls_to_try = [
-        "https://www.bls.gov/web/cpi/cpi-relative-importance.xlsx",
-        "https://www.bls.gov/cpi/tables/relative-importance/current.xlsx",
-        f"https://www.bls.gov/cpi/tables/relative-importance/{CURRENT_YEAR}.xlsx",
-        f"https://www.bls.gov/cpi/tables/relative-importance/{CURRENT_YEAR - 1}.xlsx",
-    ]
+
+    # Stable current workbook from BLS
+    url = "https://www.bls.gov/web/cpi/cpi-relative-importance.xlsx"
 
     headers = {
         "User-Agent": (
@@ -182,56 +176,46 @@ def get_supercore_weights():
         "Referer": "https://www.bls.gov/cpi/"
     }
 
-    last_error = None
+    try:
+        r = requests.get(url, headers=headers, timeout=30)
+        r.raise_for_status()
 
-    for url in urls_to_try:
-        try:
-            r = requests.get(url, headers=headers, timeout=30)
-            r.raise_for_status()
+        raw = pd.read_excel(io.BytesIO(r.content), sheet_name=0, header=None)
 
-            # Read raw sheet with no assumed headers
-            raw = pd.read_excel(io.BytesIO(r.content), sheet_name=0, header=None)
+        # BLS workbook layout: column B = item, column C = CPI-U
+        t = raw.iloc[:, [1, 2]].copy()
+        t.columns = ["Item", "CPI-U"]
 
-            # BLS workbook layout: use columns B and C (0-indexed => 1 and 2)
-            # B = item label, C = CPI-U
-            if raw.shape[1] < 3:
-                raise ValueError("Relative importance workbook does not have expected columns.")
+        t["Item"] = t["Item"].astype(str).str.strip()
+        t["CPI-U"] = pd.to_numeric(t["CPI-U"], errors="coerce")
+        t = t.dropna(subset=["CPI-U"])
+        t = t[t["Item"] != ""].copy()
 
-            t = raw.iloc[:, [1, 2]].copy()
-            t.columns = ["Item", "CPI-U"]
+        def pick_exact(label: str):
+            hit = t.loc[t["Item"].str.lower() == label.lower(), "CPI-U"]
+            if hit.empty:
+                return None
+            return float(hit.iloc[0]) / 100.0
 
-            t["Item"] = t["Item"].astype(str).str.strip()
-            t["CPI-U"] = pd.to_numeric(t["CPI-U"], errors="coerce")
+        w_cs = pick_exact("Services less energy services")
+        w_rent = pick_exact("Rent of primary residence")
+        w_oer = pick_exact("Owners' equivalent rent of residences")
 
-            # Keep only rows with numeric CPI-U
-            t = t.dropna(subset=["CPI-U"])
-            t = t[t["Item"] != ""].copy()
-
-            def pick_exact(label: str):
-                hit = t.loc[t["Item"].str.lower() == label.lower(), "CPI-U"]
-                if hit.empty:
-                    return None
-                return float(hit.iloc[0]) / 100.0
-
-            w_cs = pick_exact("Services less energy services")
-            w_rent = pick_exact("Rent of primary residence")
-            w_oer = pick_exact("Owners' equivalent rent of residences")
-
-            if w_cs is None or w_rent is None or w_oer is None:
-                last_error = (
-                    "Could not find one or more required rows. "
-                    f"Available sample rows: {t['Item'].head(25).tolist()}"
-                )
-                continue
-
+        if w_cs is not None and w_rent is not None and w_oer is not None:
             return w_cs, w_rent, w_oer
 
-        except Exception as e:
-            last_error = str(e)
-            continue
+    except Exception as e:
+        st.warning(f"BLS workbook fetch failed, using fallback weights instead: {e}")
 
-    st.error(f"Unable to fetch Supercore weights from BLS workbook: {last_error}")
-    return None, None, None
+    # ---------------------------------------------------
+    # FALLBACK WEIGHTS
+    # Replace these with the latest weights once you confirm them
+    # ---------------------------------------------------
+    FALLBACK_W_CS = 0.607
+    FALLBACK_W_RENT = 0.076
+    FALLBACK_W_OER = 0.266
+
+    return FALLBACK_W_CS, FALLBACK_W_RENT, FALLBACK_W_OER
 
 # --------------------------------------------------
 # CPI 3dp
