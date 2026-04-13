@@ -462,31 +462,34 @@ def run_cpi_goods_services():
             st.warning("Supercore could not be calculated because BLS relative-importance weights were unavailable.")
             sc = None
 else:
+   W_CS, W_RENT, W_OER = get_supercore_weights()
+
+if W_CS is None or W_RENT is None or W_OER is None:
+    st.warning("Supercore could not be calculated (weights unavailable).")
+    sc = None
+
+else:
     DEN = W_CS - W_RENT - W_OER
 
-        sc["Supercore Index SA"] = (
-            W_CS * sc["Core Services SA"]
-            - W_RENT * sc["Rent SA"]
-            - W_OER * sc["OER SA"]
-        ) / DEN
+    sc["Supercore Index SA"] = (
+        W_CS * sc["Core Services SA"]
+        - W_RENT * sc["Rent SA"]
+        - W_OER * sc["OER SA"]
+    ) / DEN
 
-        sc["Supercore Index NSA"] = (
-            W_CS * sc["Core Services NSA"]
-            - W_RENT * sc["Rent NSA"]
-            - W_OER * sc["OER NSA"]
-        ) / DEN
+    sc["Supercore Index NSA"] = (
+        W_CS * sc["Core Services NSA"]
+        - W_RENT * sc["Rent NSA"]
+        - W_OER * sc["OER NSA"]
+    ) / DEN
 
-        sc["Supercore m/m"] = (sc["Supercore Index SA"] / sc["Supercore Index SA"].shift(1) - 1) * 100
-        sc["Supercore y/y"] = (sc["Supercore Index NSA"] / sc["Supercore Index NSA"].shift(12) - 1) * 100
+    sc["Supercore m/m"] = (sc["Supercore Index SA"] / sc["Supercore Index SA"].shift(1) - 1) * 100
+    sc["Supercore y/y"] = (sc["Supercore Index NSA"] / sc["Supercore Index NSA"].shift(12) - 1) * 100
 
-        sc_out = sc[["Date", "Supercore m/m", "Supercore y/y"]].set_index("Date")
-        # merge into combined (aligned on Date index)
-        sc_out = sc[["Date", "Supercore m/m", "Supercore y/y"]].set_index("Date")
+    sc_out = sc[["Date", "Supercore m/m", "Supercore y/y"]].set_index("Date")
+    sc_out = sc_out.tail(12)
 
-        # Keep supercore aligned to the same last 12 months as the table view
-        sc_out = sc_out.tail(12)
-
-        combined = pd.concat([combined, sc_out], axis=1)
+    combined = pd.concat([combined, sc_out], axis=1)
 
 
     # --- Last 12 months, latest first ---
