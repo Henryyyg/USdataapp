@@ -915,6 +915,7 @@ def run_cpi_pce():
     }
 
     data = fetch_bls(payload)
+
     if data is None:
         return
 
@@ -929,6 +930,8 @@ def run_cpi_pce():
         name = ids[sid]
 
         df = pd.DataFrame(s["data"])
+
+        # Keep monthly observations only
         df = df[df["period"].str.startswith("M")].copy()
 
         df["Date"] = pd.to_datetime(
@@ -944,7 +947,7 @@ def run_cpi_pce():
 
         df = df.sort_values("Date")
 
-        # m/m % change
+        # Calculate m/m percentage change
         df[name] = (
             df["Value"] / df["Value"].shift(1) - 1
         ) * 100
@@ -953,10 +956,14 @@ def run_cpi_pce():
             df[["Date", name]]
         )
 
+    # Stop if BLS returned no usable series
     if not dfs:
         st.info("No CPI → PCE component data available.")
         return
 
+    # --------------------------------------------------
+    # Merge all component series
+    # --------------------------------------------------
     final = dfs[0]
 
     for extra in dfs[1:]:
@@ -973,31 +980,31 @@ def run_cpi_pce():
         .round(2)
     )
 
+    # Format date
     final.index = final.index.strftime("%Y-%m")
 
     # --------------------------------------------------
-    # Table
+    # Display table
     # --------------------------------------------------
+    display_df = final.head(24)
+
     st.subheader("CPI → PCE Components (m/m %)")
     st.dataframe(
-        final.head(24),
+        display_df,
         use_container_width=True
     )
 
     # --------------------------------------------------
     # Headline generator
     # --------------------------------------------------
-    display_df = final.head(24)
-
     if not display_df.empty:
 
         latest = display_df.iloc[0]
 
-        prev = (
-            display_df.iloc[1]
-            if len(display_df) > 1
-            else None
-        )
+        if len(display_df) > 1:
+            prev = display_df.iloc[1]
+        else:
+            prev = None
 
         headline_lines = []
 
@@ -1005,40 +1012,29 @@ def run_cpi_pce():
 
             latest_val = latest[col]
 
-         prev_val = (
-                prev[col]
-                if prev is not None
-                else pd.NA
-            )
+            if prev is not None:
+                prev_val = prev[col]
+            else:
+                prev_val = pd.NA
 
+            # Skip component if latest value is unavailable
             if pd.isna(latest_val):
                 continue
 
-            if (
-                prev is not None
-                and not pd.isna(prev_val)
-            ):
-
+            if not pd.isna(prev_val):
                 headline_lines.append(
-                    f"{col}: "
-                    f"{latest_val:.2f}% "
+                    f"{col}: {latest_val:.2f}% "
                     f"(prev. {prev_val:.2f}%)"
                 )
-
             else:
-
                 headline_lines.append(
-                    f"{col}: "
-                    f"{latest_val:.2f}%"
+                    f"{col}: {latest_val:.2f}% "
+                    f"(prev. N/A)"
                 )
 
-        headline_text = "\n".join(
-            headline_lines
-        )
+        headline_text = "\n".join(headline_lines)
 
-        st.markdown(
-            "### CPI → PCE Components headline format"
-        )
+        st.markdown("### CPI → PCE Components headline format")
 
         st.text_area(
             "",
