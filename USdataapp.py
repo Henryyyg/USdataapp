@@ -289,6 +289,45 @@ def run_cpi_3dp():
     st.markdown("### CPI y/y (NSA) – chart")
     st.line_chart(chart_df[yy_cols])
 
+    # --------------------------------------------------
+    # CPI headline generator
+    # --------------------------------------------------
+    headline_df = out[
+        [
+            "Date",
+            "Headline CPI m/m",
+            "Core CPI m/m",
+            "Headline CPI y/y",
+            "Core CPI y/y"
+        ]
+    ].sort_values("Date", ascending=False).head(2)
+
+    if len(headline_df) >= 2:
+        latest = headline_df.iloc[0]
+        prev = headline_df.iloc[1]
+
+        def fmt3(value):
+            return "N/A" if pd.isna(value) else f"{value:.3f}%"
+
+        headline_text = (
+            f"Headline CPI M/M: {fmt3(latest['Headline CPI m/m'])} "
+            f"(prev. {fmt3(prev['Headline CPI m/m'])})\n"
+            f"Core CPI M/M: {fmt3(latest['Core CPI m/m'])} "
+            f"(prev. {fmt3(prev['Core CPI m/m'])})\n"
+            f"Headline CPI Y/Y: {fmt3(latest['Headline CPI y/y'])} "
+            f"(prev. {fmt3(prev['Headline CPI y/y'])})\n"
+            f"Core CPI Y/Y: {fmt3(latest['Core CPI y/y'])} "
+            f"(prev. {fmt3(prev['Core CPI y/y'])})"
+        )
+
+        st.markdown("### CPI headline format")
+        st.text_area(
+            "",
+            value=headline_text,
+            height=150,
+            key="cpi_headline"
+        )
+
 # --------------------------------------------------
 # NFP & Unemployment Rate
 # --------------------------------------------------
@@ -352,6 +391,40 @@ def run_nfp():
 
     st.subheader("Nonfarm Payrolls (m/m change, K) & Unemployment Rate %")
     st.dataframe(df, use_container_width=True)
+
+    # --------------------------------------------------
+    # NFP & Unemployment headline generator
+    # --------------------------------------------------
+    if len(df) >= 2:
+        latest = df.iloc[0]
+        prev = df.iloc[1]
+
+        def fmt_jobs(value):
+            return "N/A" if pd.isna(value) else f"{value:.1f}k"
+
+        def fmt_rate(value):
+            return "N/A" if pd.isna(value) else f"{value:.1f}%"
+
+        headline_text = (
+            f"NFP M/M Change: {fmt_jobs(latest['NFP m/m change'])} "
+            f"(prev. {fmt_jobs(prev['NFP m/m change'])})\n"
+            f"NFP 3M Average: {fmt_jobs(latest['NFP 3m avg'])} "
+            f"(prev. {fmt_jobs(prev['NFP 3m avg'])})\n"
+            f"NFP 6M Average: {fmt_jobs(latest['NFP 6m avg'])} "
+            f"(prev. {fmt_jobs(prev['NFP 6m avg'])})\n"
+            f"NFP 12M Average: {fmt_jobs(latest['NFP 12m avg'])} "
+            f"(prev. {fmt_jobs(prev['NFP 12m avg'])})\n"
+            f"Unemployment Rate: {fmt_rate(latest['Unemployment Rate'])} "
+            f"(prev. {fmt_rate(prev['Unemployment Rate'])})"
+        )
+
+        st.markdown("### NFP & Unemployment headline format")
+        st.text_area(
+            "",
+            value=headline_text,
+            height=200,
+            key="nfp_headline"
+        )
 
 # --------------------------------------------------
 # CPI Core Goods & Services + Supercore
@@ -483,6 +556,53 @@ def run_cpi_goods_services():
 
     st.caption("Note: chart lines interpolate across single missing months due to BLS disruptions (tables remain unfilled).")
 
+    # --------------------------------------------------
+    # Core Goods / Services / Supercore headline generator
+    # --------------------------------------------------
+    headline_df = last12.head(2)
+
+    if len(headline_df) >= 2:
+        latest = headline_df.iloc[0]
+        prev = headline_df.iloc[1]
+
+        metrics = [
+            "Core goods m/m",
+            "Core goods y/y",
+            "Core services m/m",
+            "Core services y/y",
+            "Supercore m/m",
+            "Supercore y/y"
+        ]
+
+        labels = {
+            "Core goods m/m": "Core Goods CPI M/M",
+            "Core goods y/y": "Core Goods CPI Y/Y",
+            "Core services m/m": "Core Services CPI M/M",
+            "Core services y/y": "Core Services CPI Y/Y",
+            "Supercore m/m": "Supercore CPI M/M",
+            "Supercore y/y": "Supercore CPI Y/Y"
+        }
+
+        def fmt2(value):
+            return "N/A" if pd.isna(value) else f"{value:.2f}%"
+
+        headline_lines = []
+
+        for metric in metrics:
+            if metric in headline_df.columns:
+                headline_lines.append(
+                    f"{labels[metric]}: {fmt2(latest[metric])} "
+                    f"(prev. {fmt2(prev[metric])})"
+                )
+
+        st.markdown("### Core CPI components headline format")
+        st.text_area(
+            "",
+            value="\n".join(headline_lines),
+            height=220,
+            key="core_components_headline"
+        )
+
 # --------------------------------------------------
 # Annualised CPI (3m & 6m)
 # --------------------------------------------------
@@ -595,6 +715,47 @@ def run_cpi_annualised():
 
     st.subheader("Annualised CPI (3m & 6m %)")
     st.dataframe(cpi, use_container_width=True)
+
+    # --------------------------------------------------
+    # Annualised CPI headline generator
+    # --------------------------------------------------
+    if len(cpi) >= 2:
+        latest = cpi.iloc[0]
+        prev = cpi.iloc[1]
+
+        metrics = [
+            "Headline CPI Index SA 3m ann",
+            "Headline CPI Index SA 6m ann",
+            "Core CPI Index SA 3m ann",
+            "Core CPI Index SA 6m ann"
+        ]
+
+        labels = {
+            "Headline CPI Index SA 3m ann": "Headline CPI 3M Annualised",
+            "Headline CPI Index SA 6m ann": "Headline CPI 6M Annualised",
+            "Core CPI Index SA 3m ann": "Core CPI 3M Annualised",
+            "Core CPI Index SA 6m ann": "Core CPI 6M Annualised"
+        }
+
+        def fmt3(value):
+            return "N/A" if pd.isna(value) else f"{value:.3f}%"
+
+        headline_lines = []
+
+        for metric in metrics:
+            if metric in cpi.columns:
+                headline_lines.append(
+                    f"{labels[metric]}: {fmt3(latest[metric])} "
+                    f"(prev. {fmt3(prev[metric])})"
+                )
+
+        st.markdown("### Annualised CPI headline format")
+        st.text_area(
+            "",
+            value="\n".join(headline_lines),
+            height=180,
+            key="annualised_cpi_headline"
+        )
 
 # --------------------------------------------------
 # PPI → PCE Components
@@ -727,6 +888,38 @@ def run_jolts():
 
     st.subheader("JOLTS Data (Levels in thousands, Rates in %)")
     st.dataframe(df.round(2), use_container_width=True)
+
+    # --------------------------------------------------
+    # JOLTS headline generator
+    # --------------------------------------------------
+    if len(df) >= 2:
+        latest = df.iloc[0]
+        prev = df.iloc[1]
+
+        headline_lines = []
+
+        for col in df.columns:
+            latest_val = latest[col]
+            prev_val = prev[col]
+
+            if "rate" in col.lower():
+                current_text = "N/A" if pd.isna(latest_val) else f"{latest_val:.1f}%"
+                prev_text = "N/A" if pd.isna(prev_val) else f"{prev_val:.1f}%"
+            else:
+                current_text = "N/A" if pd.isna(latest_val) else f"{latest_val:,.0f}k"
+                prev_text = "N/A" if pd.isna(prev_val) else f"{prev_val:,.0f}k"
+
+            headline_lines.append(
+                f"{col}: {current_text} (prev. {prev_text})"
+            )
+
+        st.markdown("### JOLTS headline format")
+        st.text_area(
+            "",
+            value="\n".join(headline_lines),
+            height=320,
+            key="jolts_headline"
+        )
 
 # --------------------------------------------------
 # SIDEBAR SELECTION
