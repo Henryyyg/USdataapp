@@ -1101,7 +1101,7 @@ if st.sidebar.button("Run"):
     elif choice == "Annualised CPI (3m & 6m)":
         run_cpi_annualised()
     elif choice == "CPI → PCE Components":
-    run_cpi_pce()    
+        run_cpi_pce()    
     elif choice == "PPI → PCE Components":
         run_ppi_pce()    
     elif choice == "JOLTS":
