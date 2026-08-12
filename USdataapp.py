@@ -998,7 +998,6 @@ def run_cpi_pce():
     # Headline generator
     # --------------------------------------------------
     if not display_df.empty:
-
         latest = display_df.iloc[0]
 
         if len(display_df) > 1:
@@ -1009,7 +1008,6 @@ def run_cpi_pce():
         headline_lines = []
 
         for col in display_df.columns:
-
             latest_val = latest[col]
 
             if prev is not None:
@@ -1017,20 +1015,19 @@ def run_cpi_pce():
             else:
                 prev_val = pd.NA
 
-            # Skip component if latest value is unavailable
             if pd.isna(latest_val):
                 continue
 
-            if not pd.isna(prev_val):
-                headline_lines.append(
-                    f"{col}: {latest_val:.2f}% "
-                    f"(prev. {prev_val:.2f}%)"
-                )
+            current_text = f"{latest_val:.2f}%"
+
+            if pd.isna(prev_val):
+                prev_text = "N/A"
             else:
-                headline_lines.append(
-                    f"{col}: {latest_val:.2f}% "
-                    f"(prev. N/A)"
-                )
+                prev_text = f"{prev_val:.2f}%"
+
+            headline_lines.append(
+                f"{col}: {current_text} (prev. {prev_text})"
+            )
 
         headline_text = "\n".join(headline_lines)
 
@@ -1055,13 +1052,6 @@ def run_cpi_pce():
         for col in df.columns:
             latest_val = latest[col]
             prev_val = prev[col]
-
-            if "rate" in col.lower():
-                current_text = "N/A" if pd.isna(latest_val) else f"{latest_val:.1f}%"
-                prev_text = "N/A" if pd.isna(prev_val) else f"{prev_val:.1f}%"
-            else:
-                current_text = "N/A" if pd.isna(latest_val) else f"{latest_val:,.0f}k"
-                prev_text = "N/A" if pd.isna(prev_val) else f"{prev_val:,.0f}k"
 
             headline_lines.append(
                 f"{col}: {current_text} (prev. {prev_text})"
