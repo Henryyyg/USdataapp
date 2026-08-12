@@ -890,6 +890,31 @@ def run_jolts():
     st.dataframe(df.round(2), use_container_width=True)
 
 # --------------------------------------------------
+# JOLTS headline generator
+# --------------------------------------------------
+    if len(df) >= 2:
+        latest = df.iloc[0]
+        prev = df.iloc[1]
+
+        headline_lines = []
+
+        for col in df.columns:
+            latest_val = latest[col]
+            prev_val = prev[col]
+
+            headline_lines.append(
+                f"{col}: {current_text} (prev. {prev_text})"
+            )
+
+        st.markdown("### JOLTS headline format")
+        st.text_area(
+            "",
+            value="\n".join(headline_lines),
+            height=320,
+            key="jolts_headline"
+        )
+
+# --------------------------------------------------
 # CPI → PCE Components
 # --------------------------------------------------
 def run_cpi_pce():
@@ -1038,31 +1063,6 @@ def run_cpi_pce():
             value=headline_text,
             height=300,
             key="cpi_pce_headline"
-        )
-
-    # --------------------------------------------------
-    # JOLTS headline generator
-    # --------------------------------------------------
-    if len(df) >= 2:
-        latest = df.iloc[0]
-        prev = df.iloc[1]
-
-        headline_lines = []
-
-        for col in df.columns:
-            latest_val = latest[col]
-            prev_val = prev[col]
-
-            headline_lines.append(
-                f"{col}: {current_text} (prev. {prev_text})"
-            )
-
-        st.markdown("### JOLTS headline format")
-        st.text_area(
-            "",
-            value="\n".join(headline_lines),
-            height=320,
-            key="jolts_headline"
         )
 
 # --------------------------------------------------
