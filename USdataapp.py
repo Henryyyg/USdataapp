@@ -889,9 +889,9 @@ def run_jolts():
     st.subheader("JOLTS Data (Levels in thousands, Rates in %)")
     st.dataframe(df.round(2), use_container_width=True)
 
-# --------------------------------------------------
-# JOLTS headline generator
-# --------------------------------------------------
+    # --------------------------------------------------
+    # JOLTS headline generator
+    # --------------------------------------------------
     if len(df) >= 2:
         latest = df.iloc[0]
         prev = df.iloc[1]
@@ -902,14 +902,45 @@ def run_jolts():
             latest_val = latest[col]
             prev_val = prev[col]
 
+            # Rates are percentages
+            if "rate" in col.lower():
+                current_text = (
+                    "N/A"
+                    if pd.isna(latest_val)
+                    else f"{latest_val:.1f}%"
+                )
+
+                prev_text = (
+                    "N/A"
+                    if pd.isna(prev_val)
+                    else f"{prev_val:.1f}%"
+                )
+
+            # Levels are reported in thousands
+            else:
+                current_text = (
+                    "N/A"
+                    if pd.isna(latest_val)
+                    else f"{latest_val:,.0f}k"
+                )
+
+                prev_text = (
+                    "N/A"
+                    if pd.isna(prev_val)
+                    else f"{prev_val:,.0f}k"
+                )
+
             headline_lines.append(
                 f"{col}: {current_text} (prev. {prev_text})"
             )
 
+        headline_text = "\n".join(headline_lines)
+
         st.markdown("### JOLTS headline format")
+
         st.text_area(
             "",
-            value="\n".join(headline_lines),
+            value=headline_text,
             height=320,
             key="jolts_headline"
         )
