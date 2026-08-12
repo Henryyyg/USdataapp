@@ -4,6 +4,12 @@ import requests
 import json
 import io
 from datetime import datetime
+from sklearn.linear_model import RidgeCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.base import clone
+import numpy as np
 
 # --------------------------------------------------
 # GLOBAL SETTINGS
@@ -1097,6 +1103,521 @@ def run_cpi_pce():
         )
 
 # --------------------------------------------------
+# CORE PCE ACTUAL DATA
+# --------------------------------------------------
+@st.cache_data(ttl=60 * 60)
+def fetch_core_pce_actual():
+
+    url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=PCEPILFE"
+
+    try:
+        df = pd.read_csv(url)
+
+        df.columns = ["Date", "Core PCE Index"]
+
+        df["Date"] = pd.to_datetime(
+            df["Date"],
+            errors="coerce"
+        )
+
+        df["Core PCE Index"] = pd.to_numeric(
+            df["Core PCE Index"],
+            errors="coerce"
+        )
+
+        df = (
+            df
+            .dropna()
+            .sort_values("Date")
+        )
+
+        # Calculate unrounded m/m change from the actual index
+        df["Core PCE m/m"] = (
+            df["Core PCE Index"]
+            / df["Core PCE Index"].shift(1)
+            - 1
+        ) * 100
+
+        return df
+
+    except Exception as e:
+        st.error(f"Could not fetch actual Core PCE data: {e}")
+        return pd.DataFrame()
+
+# --------------------------------------------------
+# CORE PCE NOWCAST
+# --------------------------------------------------
+def run_core_pce_nowcast():
+
+    st.subheader("Core PCE Nowcast")
+
+    st.caption(
+        "Experimental model using CPI and PPI components to estimate "
+        "Core PCE m/m ahead of the official BEA release."
+    )
+
+    # ==================================================
+    # 1. CPI predictors
+    # ==================================================
+
+    cpi_series = {
+        "CUSR0000SA0L1E": "Core CPI",
+        "CUSR0000SEHA": "Rent",
+        "CUSR0000SEHC": "OER",
+        "CUSR0000SEHB": "Lodging",
+        "CUSR0000SEMF01": "Prescription Drugs",
+        "CUSR0000SEMC01": "Physicians CPI",
+        "CUSR0000SEMC02": "Dental",
+        "CUSR0000SEMD01": "Hospital CPI",
+        "CUSR0000SETD": "Vehicle Repair",
+        "CUSR0000SETE": "Vehicle Insurance",
+        "CUSR0000SETG01": "Airline Fares CPI"
+    }
+
+    # ==================================================
+    # 2. PPI predictors
+    # ==================================================
+
+    ppi_series = {
+        "PCU5239405239401": "Portfolio Management PPI",
+        "PCU4811114811111": "Air Passenger PPI",
+        "WPS511101": "Physician Care PPI",
+        "WPS511103": "Home Health PPI",
+        "WPS511104": "Hospital Outpatient PPI",
+        "WPS512101": "Hospital Inpatient PPI",
+        "WPS512102": "Nursing Home PPI"
+    }
+
+    # ==================================================
+    # 3. Pull historical component data
+    # ==================================================
+
+    series_map = {}
+
+    series_map.update(cpi_series)
+    series_map.update(ppi_series)
+
+    component_levels = fetch_bls_df(
+        series_map,
+        years_back=10
+    )
+
+    if component_levels.empty:
+        st.error("Unable to fetch CPI/PPI predictors.")
+        return
+
+    component_levels = (
+        component_levels
+        .set_index("Date")
+        .sort_index()
+    )
+
+    # --------------------------------------------------
+    # Calculate m/m changes
+    # --------------------------------------------------
+
+    component_changes = pd.DataFrame(
+        index=component_levels.index
+    )
+
+    for col in component_levels.columns:
+
+        component_changes[col] = (
+            component_levels[col]
+            / component_levels[col].shift(1)
+            - 1
+        ) * 100
+
+    # ==================================================
+    # 4. Pull actual historical Core PCE
+    # ==================================================
+
+    pce = fetch_core_pce_actual()
+
+    if pce.empty:
+        return
+
+    pce = (
+        pce
+        .set_index("Date")
+        [["Core PCE Index", "Core PCE m/m"]]
+    )
+
+    # ==================================================
+    # 5. Determine latest predictor month
+    # ==================================================
+
+    latest_month = component_changes.index.max()
+
+    latest_predictors = component_changes.loc[
+        latest_month
+    ]
+
+    # Use predictors actually available for latest month
+    available_features = latest_predictors.dropna().index.tolist()
+
+    if len(available_features) < 3:
+        st.warning(
+            "Not enough current-month CPI/PPI components are available "
+            "to produce a reliable nowcast."
+        )
+        return
+
+    # ==================================================
+    # 6. Build historical training data
+    # ==================================================
+
+    model_df = component_changes[
+        available_features
+    ].join(
+        pce["Core PCE m/m"],
+        how="inner"
+    )
+
+    model_df = model_df.dropna()
+
+    if len(model_df) < 48:
+        st.warning(
+            "Not enough complete historical observations to train "
+            "the Core PCE model."
+        )
+        return
+
+    X = model_df[available_features]
+    y = model_df["Core PCE m/m"]
+
+    # ==================================================
+    # 7. Ridge regression
+    # ==================================================
+
+    alphas = [
+        0.01,
+        0.1,
+        0.5,
+        1.0,
+        2.0,
+        5.0,
+        10.0,
+        20.0,
+        50.0
+    ]
+
+    model = Pipeline([
+        (
+            "scale",
+            StandardScaler()
+        ),
+        (
+            "ridge",
+            RidgeCV(
+                alphas=alphas
+            )
+        )
+    ])
+
+    # ==================================================
+    # 8. Time-series backtest
+    # ==================================================
+
+    tscv = TimeSeriesSplit(
+        n_splits=5
+    )
+
+    predictions = []
+    actuals = []
+
+    for train_index, test_index in tscv.split(X):
+
+        test_model = clone(model)
+
+        test_model.fit(
+            X.iloc[train_index],
+            y.iloc[train_index]
+        )
+
+        pred = test_model.predict(
+            X.iloc[test_index]
+        )
+
+        predictions.extend(pred)
+        actuals.extend(
+            y.iloc[test_index].values
+        )
+
+    predictions = np.array(predictions)
+    actuals = np.array(actuals)
+
+    rmse = np.sqrt(
+        np.mean(
+            (predictions - actuals) ** 2
+        )
+    )
+
+    mae = np.mean(
+        np.abs(
+            predictions - actuals
+        )
+    )
+
+    # ==================================================
+    # 9. Train final model
+    # ==================================================
+
+    model.fit(
+        X,
+        y
+    )
+
+    latest_X = (
+        latest_predictors[
+            available_features
+        ]
+        .to_frame()
+        .T
+    )
+
+    nowcast = float(
+        model.predict(
+            latest_X
+        )[0]
+    )
+
+    selected_alpha = (
+        model
+        .named_steps["ridge"]
+        .alpha_
+    )
+
+    # ==================================================
+    # 10. Estimate Core PCE y/y
+    # ==================================================
+
+    last_actual_date = pce.index.max()
+
+    estimated_yoy = None
+    estimated_index = None
+
+    # Only construct y/y if nowcasting month immediately
+    # follows the latest actual PCE month.
+    expected_next_month = (
+        last_actual_date
+        + pd.offsets.MonthBegin(1)
+    )
+
+    if latest_month == expected_next_month:
+
+        last_index = pce.loc[
+            last_actual_date,
+            "Core PCE Index"
+        ]
+
+        estimated_index = (
+            last_index
+            * (1 + nowcast / 100)
+        )
+
+        year_ago_date = (
+            latest_month
+            - pd.DateOffset(years=1)
+        )
+
+        if year_ago_date in pce.index:
+
+            year_ago_index = pce.loc[
+                year_ago_date,
+                "Core PCE Index"
+            ]
+
+            estimated_yoy = (
+                estimated_index
+                / year_ago_index
+                - 1
+            ) * 100
+
+    # ==================================================
+    # 11. Headline metrics
+    # ==================================================
+
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric(
+        "Estimated Core PCE M/M",
+        f"{nowcast:.3f}%"
+    )
+
+    if estimated_yoy is not None:
+
+        col2.metric(
+            "Estimated Core PCE Y/Y",
+            f"{estimated_yoy:.3f}%"
+        )
+
+    else:
+
+        col2.metric(
+            "Estimated Core PCE Y/Y",
+            "N/A"
+        )
+
+    col3.metric(
+        "Model RMSE",
+        f"{rmse:.3f}pp"
+    )
+
+    # ==================================================
+    # 12. Model details
+    # ==================================================
+
+    st.markdown("### Model information")
+
+    st.write(
+        f"**Nowcast month:** "
+        f"{latest_month.strftime('%B %Y')}"
+    )
+
+    st.write(
+        f"**Latest official Core PCE:** "
+        f"{last_actual_date.strftime('%B %Y')}"
+    )
+
+    st.write(
+        f"**Predictors currently available:** "
+        f"{len(available_features)}"
+    )
+
+    st.write(
+        f"**Historical observations used:** "
+        f"{len(model_df)}"
+    )
+
+    st.write(
+        f"**Out-of-sample MAE:** "
+        f"{mae:.3f}pp"
+    )
+
+    st.write(
+        f"**Selected Ridge alpha:** "
+        f"{selected_alpha:.2f}"
+    )
+
+    # ==================================================
+    # 13. Predictor list
+    # ==================================================
+
+    with st.expander(
+        "Components used in this nowcast"
+    ):
+
+        for feature in available_features:
+            value = latest_predictors[feature]
+
+            st.write(
+                f"{feature}: "
+                f"{value:.3f}% m/m"
+            )
+
+    # ==================================================
+    # 14. Model coefficients
+    # ==================================================
+
+    scaled_coefficients = (
+        model
+        .named_steps["ridge"]
+        .coef_
+    )
+
+    coef_df = pd.DataFrame({
+        "Component": available_features,
+        "Model coefficient": scaled_coefficients
+    })
+
+    coef_df["Absolute importance"] = (
+        coef_df[
+            "Model coefficient"
+        ].abs()
+    )
+
+    coef_df = (
+        coef_df
+        .sort_values(
+            "Absolute importance",
+            ascending=False
+        )
+        .drop(
+            columns="Absolute importance"
+        )
+    )
+
+    st.markdown("### Model component importance")
+
+    st.dataframe(
+        coef_df.round(4),
+        use_container_width=True
+    )
+
+    # ==================================================
+    # 15. Historical fitted model
+    # ==================================================
+
+    historical_pred = model.predict(X)
+
+    comparison = pd.DataFrame(
+        index=model_df.index
+    )
+
+    comparison["Actual Core PCE"] = y
+
+    comparison["Model Estimate"] = (
+        historical_pred
+    )
+
+    comparison = (
+        comparison
+        .sort_index()
+        .tail(36)
+    )
+
+    st.markdown(
+        "### Core PCE: model estimate vs actual"
+    )
+
+    st.line_chart(
+        comparison
+    )
+
+    # ==================================================
+    # 16. Headline generator
+    # ==================================================
+
+    headline_lines = [
+        f"Core PCE Nowcast M/M: {nowcast:.3f}%"
+    ]
+
+    if estimated_yoy is not None:
+
+        headline_lines.append(
+            f"Core PCE Nowcast Y/Y: "
+            f"{estimated_yoy:.3f}%"
+        )
+
+    headline_lines.append(
+        f"Model RMSE: {rmse:.3f}pp"
+    )
+
+    st.markdown(
+        "### Core PCE Nowcast headline"
+    )
+
+    st.text_area(
+        "",
+        value="\n".join(
+            headline_lines
+        ),
+        height=130,
+        key="core_pce_nowcast_headline"
+    )
+
+# --------------------------------------------------
 # SIDEBAR SELECTION
 # --------------------------------------------------
 st.sidebar.header("Select Dataset")
@@ -1109,6 +1630,7 @@ choice = st.sidebar.radio(
         "Annualised CPI (3m & 6m)",
         "CPI → PCE Components",
         "PPI → PCE Components",
+        "Core PCE Nowcast",
         "JOLTS",
         "NFP & Unemployment"
     ]
@@ -1124,7 +1646,9 @@ if st.sidebar.button("Run"):
     elif choice == "CPI → PCE Components":
         run_cpi_pce()    
     elif choice == "PPI → PCE Components":
-        run_ppi_pce()    
+        run_ppi_pce()
+    elif choice == "Core PCE Nowcast":
+        run_core_pce_nowcast()
     elif choice == "JOLTS":
         run_jolts()
     elif choice == "NFP & Unemployment":
