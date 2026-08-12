@@ -889,6 +889,164 @@ def run_jolts():
     st.subheader("JOLTS Data (Levels in thousands, Rates in %)")
     st.dataframe(df.round(2), use_container_width=True)
 
+# --------------------------------------------------
+# CPI → PCE Components
+# --------------------------------------------------
+def run_cpi_pce():
+
+    ids = {
+        "CUSR0000SEHA": "Rent of Primary Residence",
+        "CUSR0000SEHC": "Owners' Equivalent Rent",
+        "CUSR0000SEHB": "Lodging Away From Home",
+        "CUSR0000SEMF01": "Prescription Drugs",
+        "CUSR0000SEMC01": "Physicians' Services",
+        "CUSR0000SEMC02": "Dental Services",
+        "CUSR0000SEMD01": "Hospital Services",
+        "CUSR0000SETD": "Motor Vehicle Maintenance & Repair",
+        "CUSR0000SETE": "Motor Vehicle Insurance",
+        "CUSR0000SETG01": "Airline Fares"
+    }
+
+    payload = {
+        "seriesid": list(ids.keys()),
+        "startyear": str(CURRENT_YEAR - 2),
+        "endyear": str(CURRENT_YEAR),
+        "registrationkey": API_KEY
+    }
+
+    data = fetch_bls(payload)
+    if data is None:
+        return
+
+    dfs = []
+
+    for s in data["Results"]["series"]:
+        sid = s["seriesID"]
+
+        if sid not in ids:
+            continue
+
+        name = ids[sid]
+
+        df = pd.DataFrame(s["data"])
+        df = df[df["period"].str.startswith("M")].copy()
+
+        df["Date"] = pd.to_datetime(
+            df["year"] + "-" + df["period"].str.replace("M", "", regex=False),
+            format="%Y-%m",
+            errors="coerce"
+        )
+
+        df["Value"] = pd.to_numeric(
+            df["value"],
+            errors="coerce"
+        )
+
+        df = df.sort_values("Date")
+
+        # m/m % change
+        df[name] = (
+            df["Value"] / df["Value"].shift(1) - 1
+        ) * 100
+
+        dfs.append(
+            df[["Date", name]]
+        )
+
+    if not dfs:
+        st.info("No CPI → PCE component data available.")
+        return
+
+    final = dfs[0]
+
+    for extra in dfs[1:]:
+        final = final.merge(
+            extra,
+            on="Date",
+            how="outer"
+        )
+
+    final = (
+        final
+        .sort_values("Date", ascending=False)
+        .set_index("Date")
+        .round(2)
+    )
+
+    final.index = final.index.strftime("%Y-%m")
+
+    # --------------------------------------------------
+    # Table
+    # --------------------------------------------------
+    st.subheader("CPI → PCE Components (m/m %)")
+    st.dataframe(
+        final.head(24),
+        use_container_width=True
+    )
+
+    # --------------------------------------------------
+    # Headline generator
+    # --------------------------------------------------
+    display_df = final.head(24)
+
+    if not display_df.empty:
+
+        latest = display_df.iloc[0]
+
+        prev = (
+            display_df.iloc[1]
+            if len(display_df) > 1
+            else None
+        )
+
+        headline_lines = []
+
+        for col in display_df.columns:
+
+            latest_val = latest[col]
+
+            prev_val = (
+                prev[col]
+                if prev is not None
+                else pd.NA
+            )
+
+            if pd.isna(latest_val):
+                continue
+
+            if (
+                prev is not None
+                and not pd.isna(prev_val)
+            ):
+
+                headline_lines.append(
+                    f"{col}: "
+                    f"{latest_val:.2f}% "
+                    f"(prev. {prev_val:.2f}%)"
+                )
+
+            else:
+
+                headline_lines.append(
+                    f"{col}: "
+                    f"{latest_val:.2f}%"
+                )
+
+        headline_text = "\n".join(
+            headline_lines
+        )
+
+        st.markdown(
+            "### CPI → PCE Components headline format"
+        )
+
+        st.text_area(
+            "",
+            value=headline_text,
+            height=300,
+            key="cpi_pce_headline"
+        )
+
     # --------------------------------------------------
     # JOLTS headline generator
     # --------------------------------------------------
@@ -932,6 +1090,7 @@ choice = st.sidebar.radio(
         "CPI (m/m, 3dp)",
         "CPI Core Goods & Services",
         "Annualised CPI (3m & 6m)",
+        "CPI → PCE Components",
         "PPI → PCE Components",
         "JOLTS",
         "NFP & Unemployment"
@@ -945,8 +1104,10 @@ if st.sidebar.button("Run"):
         run_cpi_goods_services()
     elif choice == "Annualised CPI (3m & 6m)":
         run_cpi_annualised()
+    elif choice == "CPI → PCE Components":
+    run_cpi_pce()    
     elif choice == "PPI → PCE Components":
-        run_ppi_pce()
+        run_ppi_pce()    
     elif choice == "JOLTS":
         run_jolts()
     elif choice == "NFP & Unemployment":
