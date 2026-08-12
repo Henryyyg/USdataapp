@@ -1005,7 +1005,7 @@ def run_cpi_pce():
 
             latest_val = latest[col]
 
-            prev_val = (
+         prev_val = (
                 prev[col]
                 if prev is not None
                 else pd.NA
